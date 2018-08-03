@@ -12,16 +12,17 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
-//#include <alsa/asound.h>
+#include <alsa/asoundlib.h>
 
 #define SERVER_PORT         8888
 #define SERVER_IP           "127.0.0.1"
+//#define SERVER_IP           "192.168.0.66"
 
 #define BUFFER_SIZE         128          //size of cyclic buffer
-#define PERIOD_FRAMES       32          //number of frames with a period
+#define PERIOD_FRAMES       512          //number of frames with a period
 #define CHANNEL_NUM         2
 #define PERIOD_BYTES        (2*PERIOD_FRAMES*CHANNEL_NUM)
-#define TRANS_DATA_SIZE     (PERIOD_BYTES * 10)
+#define TRANS_DATA_SIZE     (PERIOD_BYTES * 1)
 #define AUDIO_DATA_SIZE     TRANS_DATA_SIZE
 
 #define EPT(format, ...)    do{\
@@ -72,12 +73,13 @@ int main_init(void);
 
 void *record_thread(void*);
 int socket_create_cli(int*, struct sockaddr_in*);
-int udp_send(int, struct sockaddr_in);
+int udp_send(int, struct sockaddr_in, snd_pcm_t*);
 
 void *recv_thread(void*);
 int socket_create_ser(int*, struct sockaddr_in*);
 int udp_recv(int);
 
 void *play_thread(void*);
+int set_pcm_params(snd_pcm_t*);
 
 #endif

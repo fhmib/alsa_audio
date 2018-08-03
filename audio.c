@@ -96,18 +96,33 @@ void *record_thread(void *arg)
     int client_fd = -1;
     socklen_t len;
     struct sockaddr_in dest;
+    snd_pcm_t *handle = NULL;
 
     //create socket
     rval = socket_create_cli(&client_fd, &dest);
     if(rval){
+        EPT("create socket failed\n");
         rval = 1;
         goto thread_return;
     }
 
     //add recording code here
+    rval = snd_pcm_open(&handle, "default", SND_PCM_STREAM_CAPTURE, 0);
+    if(rval){
+        EPT("unable to open pcm device, rval = %d: %s\n", rval, snd_strerror(rval));
+        rval = 2;
+        goto thread_return;
+    }
+
+    rval = set_pcm_params(handle);
+    if(rval){
+        EPT("set pcm parameters failed!\n");
+        rval = 2;
+        goto thread_return;
+    }
 
     //socket
-    rval = udp_send(client_fd, dest);
+    rval = udp_send(client_fd, dest, handle);
 
 thread_return:
     pthread_mutex_lock(&tshare.mutex);
@@ -138,7 +153,7 @@ func_exit:
     return rval;
 }
 
-int udp_send(int client_fd, struct sockaddr_in dest)
+int udp_send(int client_fd, struct sockaddr_in dest, snd_pcm_t *handle)
 {
     socklen_t len;
     int rval = 0;
@@ -150,16 +165,19 @@ int udp_send(int client_fd, struct sockaddr_in dest)
     msg.node = sa;
     msg.seq = 0;
 
+    /*
     file_fd = open("./output.raw", O_RDONLY);
     if(file_fd == -1){
         EPT("open file failed! %s\n", strerror(errno));
         rval = 1;
         goto func_exit;
     }
+    */
 
     len = sizeof(dest);
 
     while(1){
+        /*
         ret = read(file_fd, msg.data, TRANS_DATA_SIZE);
         if(ret == 0){
             EPT("read end of file\n");
@@ -172,10 +190,26 @@ int udp_send(int client_fd, struct sockaddr_in dest)
             rval = 2;
             goto func_exit;
         }
+        */
+
+        ret = snd_pcm_readi(handle, msg.data, PERIOD_FRAMES);
+
+        if(ret == -EPIPE){
+            //EPIPE means overrun
+            EPT("overrun!\n");
+            snd_pcm_prepare(handle);
+        }
+        else if(ret < 0){
+            EPT("error from read. ret = %d error:%s\n", ret, snd_strerror(ret));
+        }
+        else if(ret != (int)PERIOD_FRAMES){
+            EPT("short read, read %d frames\n", ret);
+        }
 
         rval = sendto(client_fd, &msg, ret + HEAD_LENGTH, 0, (struct sockaddr*)&dest, len);
+        //EPT("I've send msg to server, rval = %d\n", rval);
         msg.seq++;
-        usleep(1);
+        //usleep(1);
     }
 
 func_exit:
@@ -258,6 +292,7 @@ int udp_recv(int client_fd)
     while(1){
         memset(buf, 0, MSG_LENGTH);
         ret = recvfrom(client_fd, buf, MSG_LENGTH, 0, (struct sockaddr*)&dest, &len);
+        //EPT("receive msg, ret = %d\n", ret);
         if(ret == 0) continue;
 
         pmsg = (trans_data*)buf;
@@ -312,12 +347,27 @@ func_exit:
 //playback
 void *play_thread(void *arg)
 {
-    int rval = 0;
+    int rval = 0, ret;
     int i;
     cyc_data_t *pdata;
+    snd_pcm_t *handle = NULL;
 
+    rval = snd_pcm_open(&handle, "default", SND_PCM_STREAM_PLAYBACK, 0);
+    if(rval){
+        EPT("open pcm device failed!\n");
+        rval = 1;
+        goto thread_return;
+    }
+
+    rval = set_pcm_params(handle);
+    if(rval){
+        EPT("set pcm parameters failed!\n");
+        rval = 2;
+        goto thread_return;
+    }
+
+    /*
     int file_fd;
-    int ret;
 
     file_fd = open("./output2.raw", O_RDWR);
     if(file_fd == -1){
@@ -325,9 +375,10 @@ void *play_thread(void *arg)
         rval = 1;
         goto thread_return;
     }
+    */
 
     while(1){
-        for(i = 0; i < 32; i++){
+        for(i = 1; i < 2; i++){
 
             pthread_mutex_lock(&recv_mutex);
 
@@ -345,7 +396,22 @@ void *play_thread(void *arg)
             else{
                 if(pdata->head == BUFFER_SIZE - 1) pdata->head = 0;
                 else pdata->head++;
+
+                ret = snd_pcm_writei(handle, pdata->buf[pdata->head], pdata->size[pdata->head]);
+                if(ret == -EPIPE){
+                    //EPIPE means underrun
+                    EPT("underrun!\n");
+                    snd_pcm_prepare(handle);
+                }
+                else if(ret < 0){
+                    EPT("error from write, ret = %d: %s\n", ret, snd_strerror(ret));
+                }
+                else if(ret != (int)PERIOD_FRAMES){
+                    EPT("short write, write %d frames\n", ret);
+                }
+                /*
                 ret = write(file_fd, pdata->buf[pdata->head], pdata->size[pdata->head]);
+                */
             }
 
             pthread_mutex_unlock(&recv_mutex);
@@ -361,4 +427,48 @@ thread_return:
     pthread_mutex_unlock(&tshare.mutex);
     sleep(1);
     pthread_exit((void*)&rval);
+}
+
+int set_pcm_params(snd_pcm_t *handle)
+{
+    int rval = 0;
+    snd_pcm_hw_params_t *params;
+    snd_pcm_uframes_t frames;
+    U32 rate;
+    int dir;
+
+    //Allocate a hardware parameters object
+    snd_pcm_hw_params_alloca(&params);
+
+    //fill it in with defalut values
+    snd_pcm_hw_params_any(handle, params);
+
+    //set the desired hardware parameters
+    //interleaved mode
+    snd_pcm_hw_params_set_access(handle, params, SND_PCM_ACCESS_RW_INTERLEAVED);
+
+    //signed 16-bit little-endian format
+    snd_pcm_hw_params_set_format(handle, params, SND_PCM_FORMAT_S16_LE);
+
+    //single channel
+    snd_pcm_hw_params_set_channels(handle, params, 2);
+
+    //44100 bits/second sampling rate(CD quality)
+    rate = 44100;
+    snd_pcm_hw_params_set_rate_near(handle, params, &rate, &dir);
+
+    //set period size to 32 frames
+    frames = PERIOD_FRAMES;
+    snd_pcm_hw_params_set_period_size_near(handle, params, &frames, &dir);
+
+    //write the parameters to the driver
+    rval = snd_pcm_hw_params(handle, params);
+    if(rval){
+        EPT("unalbe to set hw parameters. rval = %d error:%s\n", rval, snd_strerror(rval));
+        rval = 1;
+        goto func_exit;
+    }
+
+func_exit:
+    return rval;
 }
