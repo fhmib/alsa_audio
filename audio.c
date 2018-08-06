@@ -206,7 +206,7 @@ int udp_send(int client_fd, struct sockaddr_in dest, snd_pcm_t *handle)
             EPT("short read, read %d frames\n", ret);
         }
 
-        rval = sendto(client_fd, &msg, ret + HEAD_LENGTH, 0, (struct sockaddr*)&dest, len);
+        rval = sendto(client_fd, &msg, (ret * 2 * CHANNEL_NUM) + HEAD_LENGTH, 0, (struct sockaddr*)&dest, len);
         //EPT("I've send msg to server, rval = %d\n", rval);
         msg.seq++;
         //usleep(1);
@@ -325,7 +325,7 @@ int udp_recv(int client_fd)
         }
 
         memcpy(node_pbuf[index].pdata->buf[node_pbuf[index].pdata->tail], pmsg->data, AUDIO_DATA_SIZE);
-        node_pbuf[index].pdata->size[node_pbuf[index].pdata->tail] = ret - HEAD_LENGTH;
+        node_pbuf[index].pdata->size[node_pbuf[index].pdata->tail] = (ret - HEAD_LENGTH)/(2*CHANNEL_NUM);
         if(node_pbuf[index].pdata->tail == BUFFER_SIZE - 1) node_pbuf[index].pdata->tail = 0;
         else node_pbuf[index].pdata->tail++;
 
@@ -378,7 +378,7 @@ void *play_thread(void *arg)
     */
 
     while(1){
-        for(i = 1; i < 2; i++){
+        for(i = 0; i < 32; i++){
 
             pthread_mutex_lock(&recv_mutex);
 
@@ -406,7 +406,7 @@ void *play_thread(void *arg)
                 else if(ret < 0){
                     EPT("error from write, ret = %d: %s\n", ret, snd_strerror(ret));
                 }
-                else if(ret != (int)PERIOD_FRAMES){
+                else if(ret != (int)pdata->size[pdata->head]){
                     EPT("short write, write %d frames\n", ret);
                 }
                 /*

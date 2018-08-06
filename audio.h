@@ -19,7 +19,7 @@
 //#define SERVER_IP           "192.168.0.66"
 
 #define BUFFER_SIZE         128          //size of cyclic buffer
-#define PERIOD_FRAMES       512          //number of frames with a period
+#define PERIOD_FRAMES       256          //number of frames with a period
 #define CHANNEL_NUM         2
 #define PERIOD_BYTES        (2*PERIOD_FRAMES*CHANNEL_NUM)
 #define TRANS_DATA_SIZE     (PERIOD_BYTES * 1)
