@@ -139,6 +139,7 @@ thread_return:
 int socket_create_cli(int *fd, struct sockaddr_in *dest)
 {
     int rval = 0;
+    int optval = 1;
 
     *fd = socket(AF_INET, SOCK_DGRAM, 0);
     if(fd < 0){
@@ -146,6 +147,8 @@ int socket_create_cli(int *fd, struct sockaddr_in *dest)
         rval = 1;
         goto func_exit;
     }
+
+    setsockopt(*fd, SOL_SOCKET, SO_BROADCAST | SO_REUSEADDR, &optval, sizeof(int));
 
     memset(dest, 0, sizeof(struct sockaddr_in));
     dest->sin_family = AF_INET;
@@ -253,6 +256,7 @@ thread_return:
 int socket_create_ser(int *fd, struct sockaddr_in *src)
 {
     int rval = 0;
+    int optval = 1;
 
     *fd = socket(AF_INET, SOCK_DGRAM, 0);
     if(fd < 0){
@@ -260,6 +264,8 @@ int socket_create_ser(int *fd, struct sockaddr_in *src)
         rval = 1;
         goto func_exit;
     }
+
+    setsockopt(*fd, SOL_SOCKET, SO_BROADCAST | SO_REUSEADDR, &optval, sizeof(int));
 
     memset(src, 0, sizeof(struct sockaddr_in));
     src->sin_family = AF_INET;
@@ -301,12 +307,10 @@ int udp_recv(int client_fd)
 
         pmsg = (trans_data*)buf;
 
-        /*
         if(sa == pmsg->node){
-            EPT("recive from the same node address, drop packet!\n");
+            //EPT("recive from the same node address, drop packet!\n");
             continue;
         }
-        */
 
         index = pmsg->node - 1;
 

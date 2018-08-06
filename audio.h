@@ -16,7 +16,7 @@
 #include <alsa/asoundlib.h>
 
 #define SERVER_PORT         8888
-#define SERVER_IP           "127.0.0.1"
+#define SERVER_IP           "255.255.255.255"
 //#define SERVER_IP           "192.168.0.66"
 
 #define BUFFER_SIZE         128          //size of cyclic buffer
