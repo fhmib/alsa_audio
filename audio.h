@@ -6,6 +6,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <errno.h>
+#include <math.h>
 #include <fcntl.h>
 #include <pthread.h>
 #include <sys/types.h>
@@ -24,6 +25,9 @@
 #define PERIOD_BYTES        (2*PERIOD_FRAMES*CHANNEL_NUM)
 #define TRANS_DATA_SIZE     (PERIOD_BYTES * 1)
 #define AUDIO_DATA_SIZE     TRANS_DATA_SIZE
+
+#define MIX_CHANNEL_COUNT   3
+#define SIZE_AUDIO_FRAME    2
 
 #define EPT(format, ...)    do{\
                                 char _pstr[512];\
@@ -69,6 +73,12 @@ typedef struct _trans_data{
 #define MSG_LENGTH          sizeof(trans_data)
 #define HEAD_LENGTH         (MSG_LENGTH - TRANS_DATA_SIZE)
 
+typedef struct _mix_buf_t{
+    char buf[PERIOD_BYTES];
+    U32 size;
+}mix_buf_t;
+#define MIX_BUF_SIZE        sizeof(mix_buf_t)
+
 int main_init(void);
 
 void *record_thread(void*);
@@ -81,5 +91,6 @@ int udp_recv(int);
 
 void *play_thread(void*);
 int set_pcm_params(snd_pcm_t*);
-
+int Mix(int);
+void _Mix(char sourseFile[8][SIZE_AUDIO_FRAME],int number,char *objectFile);  
 #endif

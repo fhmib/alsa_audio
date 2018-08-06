@@ -11,6 +11,9 @@ tshare_t tshare = {
 };
 
 node_pbuf_t node_pbuf[32];
+mix_buf_t mix_buf[MIX_CHANNEL_COUNT];
+char play_buf[PERIOD_BYTES];
+U32 play_len;
 pthread_mutex_t recv_mutex;
 
 int main(int argc, char *argv[])
@@ -284,6 +287,7 @@ int udp_recv(int client_fd)
     int rval = 0, ret;
     char buf[MSG_LENGTH];
     trans_data *pmsg;
+    cyc_data_t *cyc_data;
 
     U8 index;
 
@@ -324,10 +328,12 @@ int udp_recv(int client_fd)
             node_pbuf[index].pdata->tail = 1;
         }
 
-        memcpy(node_pbuf[index].pdata->buf[node_pbuf[index].pdata->tail], pmsg->data, AUDIO_DATA_SIZE);
-        node_pbuf[index].pdata->size[node_pbuf[index].pdata->tail] = (ret - HEAD_LENGTH)/(2*CHANNEL_NUM);
-        if(node_pbuf[index].pdata->tail == BUFFER_SIZE - 1) node_pbuf[index].pdata->tail = 0;
-        else node_pbuf[index].pdata->tail++;
+        cyc_data = node_pbuf[index].pdata;
+
+        memcpy(cyc_data->buf[cyc_data->tail], pmsg->data, AUDIO_DATA_SIZE);
+        cyc_data->size[cyc_data->tail] = ret - HEAD_LENGTH;
+        if(cyc_data->tail == BUFFER_SIZE - 1) cyc_data->tail = 0;
+        else cyc_data->tail++;
 
         node_pbuf[index].loseq++;
 
@@ -348,7 +354,7 @@ func_exit:
 void *play_thread(void *arg)
 {
     int rval = 0, ret;
-    int i;
+    int i, j;
     cyc_data_t *pdata;
     snd_pcm_t *handle = NULL;
 
@@ -378,6 +384,7 @@ void *play_thread(void *arg)
     */
 
     while(1){
+        j = 0;
         for(i = 0; i < 32; i++){
 
             pthread_mutex_lock(&recv_mutex);
@@ -397,7 +404,14 @@ void *play_thread(void *arg)
                 if(pdata->head == BUFFER_SIZE - 1) pdata->head = 0;
                 else pdata->head++;
 
-                ret = snd_pcm_writei(handle, pdata->buf[pdata->head], pdata->size[pdata->head]);
+                if(j > MIX_CHANNEL_COUNT - 1){
+                    pthread_mutex_unlock(&recv_mutex);
+                    continue;
+                }
+                memcpy(mix_buf[j].buf, pdata->buf[pdata->head], pdata->size[pdata->head]);
+                mix_buf[j].size = pdata->size[pdata->head];
+                j++;
+                /*ret = snd_pcm_writei(handle, pdata->buf[pdata->head], pdata->size[pdata->head]/(2*CHANNEL_NUM));
                 if(ret == -EPIPE){
                     //EPIPE means underrun
                     EPT("underrun!\n");
@@ -406,15 +420,31 @@ void *play_thread(void *arg)
                 else if(ret < 0){
                     EPT("error from write, ret = %d: %s\n", ret, snd_strerror(ret));
                 }
-                else if(ret != (int)pdata->size[pdata->head]){
+                else if(ret != (int)(pdata->size[pdata->head]/(2*CHANNEL_NUM))){
                     EPT("short write, write %d frames\n", ret);
-                }
+                }*/
                 /*
                 ret = write(file_fd, pdata->buf[pdata->head], pdata->size[pdata->head]);
                 */
             }
 
             pthread_mutex_unlock(&recv_mutex);
+        }
+        if(j == 0)
+            continue;
+        rval = Mix(j);
+        ret = snd_pcm_writei(handle, play_buf, (int)(play_len/(2*CHANNEL_NUM)));
+        //EPT("ret = %d, play_len = %d , j = %d\n", ret, play_len, j);
+        if(ret == -EPIPE){
+            //EPIPE means underrun
+            EPT("underrun!\n");
+            snd_pcm_prepare(handle);
+        }
+        else if(ret < 0){
+            EPT("error from write, ret = %d: %s\n", ret, snd_strerror(ret));
+        }
+        else if(ret != (int)(play_len/(2*CHANNEL_NUM))){
+            EPT("short write, write %d frames\n", ret);
         }
     }
 
@@ -472,3 +502,84 @@ int set_pcm_params(snd_pcm_t *handle)
 func_exit:
     return rval;
 }
+
+int Mix(int number)
+{
+    int rval = 0;
+    int i, j, k;
+    char sourcefile[MIX_CHANNEL_COUNT][2];  
+    char *pos;
+    short data_mix;
+    U32 ret[MIX_CHANNEL_COUNT];
+
+    pos = play_buf;
+    play_len = 0;
+    for(i = 0; i < number; i++)
+        ret[i] = mix_buf[i].size;
+
+    while(1){
+        j = 0;
+
+        for(i = 0; i < number; i++){
+            if(ret[i] < 2) continue;
+            memcpy(sourcefile[j], mix_buf[i].buf+play_len, 2);
+            k = j;
+            j++;
+        }
+        if(j > 1){
+            _Mix(sourcefile, j, (char*)&data_mix);
+            if(data_mix > pow(2,16-1) || data_mix < -pow(2,16-1))  
+                EPT("mix error\n");  
+        }else if(j == 1){
+            data_mix = *(short*)sourcefile[k];
+        }else{
+            break;
+        }
+
+        memcpy(pos, &data_mix, 2);
+        pos+=2;
+        play_len+=2;
+
+        for(i = 0; i < number; i++){
+            if(ret[i] > 1) ret[i]-=2;
+        }
+
+    }
+
+    return rval;
+}
+
+void _Mix(char sourseFile[MIX_CHANNEL_COUNT][SIZE_AUDIO_FRAME],int number,char *objectFile)  
+{  
+    //归一化混音  
+    int const MAX=32767;
+    int const MIN=-32768;
+
+    double f=1;
+    int output;
+    int i = 0,j = 0;
+    for (i=0;i<SIZE_AUDIO_FRAME/2;i++)
+    {
+        int temp=0;  
+        for (j=0;j<number;j++)  
+        {  
+            temp+=*(short*)(sourseFile[j]+i*2);  
+        }                  
+        output=(int)(temp*f);  
+        if (output>MAX)  
+        {  
+            f=(double)MAX/(double)(output);  
+            output=MAX;  
+        }  
+        if (output<MIN)  
+        {  
+            f=(double)MIN/(double)(output);  
+            output=MIN;  
+        }  
+        if (f<1)  
+        {  
+            f+=((double)1-f)/(double)32;  
+        }  
+        *(short*)(objectFile+i*2)=(short)output;  
+    }  
+}  
