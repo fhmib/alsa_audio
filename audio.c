@@ -11,15 +11,14 @@ tshare_t tshare = {
 };
 
 node_pbuf_t node_pbuf[32];
-mix_buf_t mix_buf[MIX_CHANNEL_COUNT];
-char play_buf[PERIOD_BYTES];
-U32 play_len;
+mix_buf_t mix_buf[MIX_CHANNEL_COUNT];   //for mixer
 pthread_mutex_t recv_mutex;
 
 int main(int argc, char *argv[])
 {
     int rval = 0;
     int stop = 0;
+    struct sigaction act;
     pthread_t recd_tid = -1;
     pthread_t play_tid = -1;
     pthread_t recv_tid = -1;
@@ -39,6 +38,11 @@ int main(int argc, char *argv[])
     }
 
     rval = main_init();
+
+    //signal(SIGALRM, dmm);
+    act.sa_handler = dmm;
+    sigaction(SIGALRM, &act, 0);
+    alarm(10);
 
     rval = pthread_create(&recv_tid, NULL, recv_thread, NULL);
     if(rval != 0){
@@ -72,6 +76,7 @@ int main(int argc, char *argv[])
     pthread_mutex_unlock(&tshare.mutex);
 
 process_exit:
+    main_exit();
     exit(rval);
 }
 
@@ -89,6 +94,20 @@ int main_init()
     memset(node_pbuf, 0, NODE_PBUF_SIZE * 32);
 
 func_exit:
+    return rval;
+}
+
+int main_exit(){
+    int rval = 0;
+    int i;
+
+    for(i = 0; i < 32; i++){
+        if(node_pbuf[i].pdata != NULL){
+            free(node_pbuf[i].pdata);
+            node_pbuf[i].pdata = NULL;
+        }
+    }
+
     return rval;
 }
 
@@ -314,10 +333,10 @@ int udp_recv(int client_fd)
 
         index = pmsg->node - 1;
 
-        if((MYMAX(node_pbuf[index].loseq, pmsg->seq) - MYMIN(node_pbuf[index].loseq, pmsg->seq)) > 1000){
-            node_pbuf[index].loseq = pmsg->seq;
+        if((MYMAX(node_pbuf[index].seq, pmsg->seq) - MYMIN(node_pbuf[index].seq, pmsg->seq)) > 1000){
+            node_pbuf[index].seq = pmsg->seq;
         }
-        else if(node_pbuf[index].loseq > pmsg->seq){
+        else if(node_pbuf[index].seq > pmsg->seq){
             EPT("drop unsequence packet!\n");
             continue;
         }
@@ -326,6 +345,7 @@ int udp_recv(int client_fd)
 
         if(!node_pbuf[index].valid){
             //create buffer 
+            //EPT("malloc node_pbuf[%d].pdata\n", index);
             node_pbuf[index].pdata = (cyc_data_t*)malloc(CYC_DATA_SIZE);
             node_pbuf[index].valid = 1;
             node_pbuf[index].pdata->head = 0;
@@ -339,6 +359,7 @@ int udp_recv(int client_fd)
         if(cyc_data->tail == BUFFER_SIZE - 1) cyc_data->tail = 0;
         else cyc_data->tail++;
 
+        node_pbuf[index].seq++;
         node_pbuf[index].loseq++;
 
         //for test
@@ -360,6 +381,8 @@ void *play_thread(void *arg)
     int rval = 0, ret;
     int i, j;
     cyc_data_t *pdata;
+    char play_buf[PERIOD_BYTES];            //for blayback
+    U32 play_len;                           //length of play_buf[]
     snd_pcm_t *handle = NULL;
 
     rval = snd_pcm_open(&handle, "default", SND_PCM_STREAM_PLAYBACK, 0);
@@ -436,7 +459,7 @@ void *play_thread(void *arg)
         }
         if(j == 0)
             continue;
-        rval = Mix(j);
+        rval = Mix(j, play_buf, &play_len);
         ret = snd_pcm_writei(handle, play_buf, (int)(play_len/(2*CHANNEL_NUM)));
         //EPT("ret = %d, play_len = %d , j = %d\n", ret, play_len, j);
         if(ret == -EPIPE){
@@ -507,9 +530,10 @@ func_exit:
     return rval;
 }
 
-int Mix(int number)
+int Mix(int number, char *play_buf, U32 *pplay_len)
 {
     int rval = 0;
+    U32 play_len;
     int i, j, k;
     char sourcefile[MIX_CHANNEL_COUNT][2];  
     char *pos;
@@ -550,6 +574,7 @@ int Mix(int number)
 
     }
 
+    *pplay_len = play_len;
     return rval;
 }
 
@@ -587,3 +612,24 @@ void _Mix(char sourseFile[MIX_CHANNEL_COUNT][SIZE_AUDIO_FRAME],int number,char *
         *(short*)(objectFile+i*2)=(short)output;  
     }  
 }  
+
+void dmm(int signal){
+    int i;
+
+    pthread_mutex_lock(&recv_mutex);
+    for(i = 0; i < 32; i++){
+        if(node_pbuf[i].valid){
+            if(!node_pbuf[i].loseq){
+                //EPT("free node_pbuf[%d].pdata\n", i);
+                free(node_pbuf[i].pdata);
+                node_pbuf[i].pdata = NULL;
+                node_pbuf[i].valid = 0;
+            }else{
+                node_pbuf[i].loseq = 0;
+            }
+        }
+    }
+    pthread_mutex_unlock(&recv_mutex);
+
+    alarm(10);
+}

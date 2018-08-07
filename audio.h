@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <signal.h>
 #include <errno.h>
 #include <math.h>
 #include <fcntl.h>
@@ -80,6 +81,7 @@ typedef struct _mix_buf_t{
 #define MIX_BUF_SIZE        sizeof(mix_buf_t)
 
 int main_init(void);
+int main_exit(void);
 
 void *record_thread(void*);
 int socket_create_cli(int*, struct sockaddr_in*);
@@ -91,6 +93,8 @@ int udp_recv(int);
 
 void *play_thread(void*);
 int set_pcm_params(snd_pcm_t*);
-int Mix(int);
+int Mix(int, char*, U32*);
 void _Mix(char sourseFile[8][SIZE_AUDIO_FRAME],int number,char *objectFile);  
+
+void dmm(int);
 #endif
