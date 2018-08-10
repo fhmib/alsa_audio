@@ -35,6 +35,8 @@
 
 #define LOCAL_TEST          0           //0 is local test, 1 is not.
 #define CAPDATA_TEST        0
+#define TIME_TEST_RECV      0
+#define TIME_TEST_PLAY      0
 
 #define EPT(format, ...)    do{\
                                 char _pstr[512];\
