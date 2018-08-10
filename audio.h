@@ -8,6 +8,7 @@
 #include <signal.h>
 #include <errno.h>
 #include <math.h>
+#include <time.h>
 #include <fcntl.h>
 #include <pthread.h>
 #include <sys/types.h>
@@ -20,7 +21,7 @@
 #define SERVER_IP           "255.255.255.255"
 //#define SERVER_IP           "192.168.0.66"
 
-#define BUFFER_SIZE         32          //size of cyclic buffer
+#define BUFFER_SIZE         32           //size of cyclic buffer
 //#define SAMPLE_RATE         44100
 #define SAMPLE_RATE         8000
 #define PERIOD_FRAMES       256          //number of frames with a period
@@ -32,7 +33,7 @@
 #define MIX_CHANNEL_COUNT   3
 #define SIZE_AUDIO_FRAME    2
 
-#define LOCAL_TEST          1           //0 is local test, 1 is not.
+#define LOCAL_TEST          0           //0 is local test, 1 is not.
 #define CAPDATA_TEST        0
 
 #define EPT(format, ...)    do{\

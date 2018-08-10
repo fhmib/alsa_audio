@@ -206,7 +206,9 @@ int udp_send(int client_fd, struct sockaddr_in dest, snd_pcm_t *handle)
 
     int file_fd = 0;
     int ret;
+    int fflag;
 
+    fflag = 1;
     msg.node = sa;
     msg.seq = 0;
 
@@ -228,6 +230,14 @@ int udp_send(int client_fd, struct sockaddr_in dest, snd_pcm_t *handle)
             EPT("short read, read %d frames\n", ret);
         }
 
+        if(fflag && (msg.seq < 50)){
+            msg.seq++;
+            continue;
+        }
+
+        fflag = 0;
+
+        if((((int*)msg.data)[0] == 0) && (((int*)(msg.data+((ret-1)*2*CHANNEL_NUM)))[0] == 0)) continue;
         rval = sendto(client_fd, &msg, (ret * 2 * CHANNEL_NUM) + HEAD_LENGTH, 0, (struct sockaddr*)&dest, len);
         //EPT("I've send msg to server, rval = %d\n", rval);
         msg.seq++;
@@ -345,9 +355,10 @@ int udp_recv(int client_fd)
         }
 
         //drop the first 50 packets
+        /*
         if(node_pbuf[index].seq < 50){
             continue;
-        }
+        }*/
 
         pthread_mutex_lock(&recv_mutex);
 
@@ -400,7 +411,9 @@ void *play_thread(void *arg)
     int i, j;
     cyc_data_t *pdata;
     char play_buf[PERIOD_BYTES];            //for blayback
-    U32 play_len;                           //length of play_buf[]
+    char temp_buf[PERIOD_BYTES];            //for blayback
+    U32 play_len = 0;                           //length of play_buf[]
+    U32 temp_len = 0;
     snd_pcm_t *handle = NULL;
 
     rval = snd_pcm_open(&handle, "default", SND_PCM_STREAM_PLAYBACK, 0);
@@ -466,9 +479,17 @@ void *play_thread(void *arg)
 
             pthread_mutex_unlock(&recv_mutex);
         }
+
         if(j == 0)
             continue;
+
         rval = Mix(j, play_buf, &play_len);
+
+        if(temp_len){
+            ret = snd_pcm_writei(handle, temp_buf, (int)(temp_len/(2*CHANNEL_NUM)));
+            temp_len = 0;
+        }
+
         ret = snd_pcm_writei(handle, play_buf, (int)(play_len/(2*CHANNEL_NUM)));
         //EPT("ret = %d, play_len = %d , j = %d\n", ret, play_len, j);
         if(ret == -EPIPE){
@@ -476,6 +497,8 @@ void *play_thread(void *arg)
             EPT("underrun!\n");
             usleep(100000);
             snd_pcm_prepare(handle);
+            temp_len = play_len;
+            memcpy(temp_buf, play_buf, temp_len);
         }
         else if(ret < 0){
             EPT("error from write, ret = %d: %s\n", ret, snd_strerror(ret));
