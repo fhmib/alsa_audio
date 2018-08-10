@@ -10,15 +10,25 @@ tshare_t tshare = {
     1
 };
 
-node_pbuf_t node_pbuf[32];
+node_pbuf_t node_pbuf[32];              //buffer which stores each node's info
 mix_buf_t mix_buf[MIX_CHANNEL_COUNT];   //for mixer
 pthread_mutex_t recv_mutex;
+
+#if CAPDATA_TEST
+//for capture data test
+U8 cap_flag;                            //for capture socket data to file
+int cap_fd;
+#endif
+
 
 int main(int argc, char *argv[])
 {
     int rval = 0;
     int stop = 0;
     struct sigaction act;
+#if CAPDATA_TEST
+    struct sigaction cap_act;
+#endif
     pthread_t recd_tid = -1;
     pthread_t play_tid = -1;
     pthread_t recv_tid = -1;
@@ -39,9 +49,14 @@ int main(int argc, char *argv[])
 
     rval = main_init();
 
-    //signal(SIGALRM, dmm);
+    act.sa_flags = 0;
     act.sa_handler = dmm;
     sigaction(SIGALRM, &act, 0);
+#if CAPDATA_TEST
+    cap_act.sa_flags = 0;
+    cap_act.sa_handler = cap_data;
+    sigaction(SIGUSR1, &cap_act, 0);
+#endif
     alarm(10);
 
     rval = pthread_create(&recv_tid, NULL, recv_thread, NULL);
@@ -83,6 +98,10 @@ process_exit:
 int main_init()
 {
     int rval = 0;
+
+#if CAPDATA_TEST
+    cap_flag = 0;
+#endif
 
     rval = pthread_mutex_init(&recv_mutex, NULL);
     if(rval){
@@ -135,7 +154,6 @@ void *record_thread(void *arg)
         rval = 2;
         goto thread_return;
     }
-
     rval = set_pcm_params(handle);
     if(rval){
         EPT("set pcm parameters failed!\n");
@@ -143,7 +161,7 @@ void *record_thread(void *arg)
         goto thread_return;
     }
 
-    //socket
+    //socket send
     rval = udp_send(client_fd, dest, handle);
 
 thread_return:
@@ -155,6 +173,7 @@ thread_return:
     pthread_exit((void*)&rval);
 }
 
+//creat socket
 int socket_create_cli(int *fd, struct sockaddr_in *dest)
 {
     int rval = 0;
@@ -178,6 +197,7 @@ func_exit:
     return rval;
 }
 
+//send audio data through socket
 int udp_send(int client_fd, struct sockaddr_in dest, snd_pcm_t *handle)
 {
     socklen_t len;
@@ -190,32 +210,9 @@ int udp_send(int client_fd, struct sockaddr_in dest, snd_pcm_t *handle)
     msg.node = sa;
     msg.seq = 0;
 
-    /*
-    file_fd = open("./output.raw", O_RDONLY);
-    if(file_fd == -1){
-        EPT("open file failed! %s\n", strerror(errno));
-        rval = 1;
-        goto func_exit;
-    }
-    */
-
     len = sizeof(dest);
 
     while(1){
-        /*
-        ret = read(file_fd, msg.data, TRANS_DATA_SIZE);
-        if(ret == 0){
-            EPT("read end of file\n");
-            close(file_fd);
-            while(1) sleep(10);
-        }
-        else if(ret < 0){
-            EPT("read error! %s\n", strerror(errno));
-            close(file_fd);
-            rval = 2;
-            goto func_exit;
-        }
-        */
 
         ret = snd_pcm_readi(handle, msg.data, PERIOD_FRAMES);
 
@@ -241,7 +238,7 @@ func_exit:
     return rval;
 }
 
-//receive from socket
+//receive data from socket and process them
 void *recv_thread(void *arg)
 {
     int rval = 0;
@@ -304,13 +301,17 @@ func_exit:
     return rval;
 }
 
-//receive from socket function
+//receive from socket and analyze data
 int udp_recv(int client_fd)
 {
     socklen_t len;
     struct sockaddr_in dest;
     int rval = 0, ret;
     char buf[MSG_LENGTH];
+#if CAPDATA_TEST
+    char capdata[MSG_LENGTH];
+    int capret;
+#endif
     trans_data *pmsg;
     cyc_data_t *cyc_data;
 
@@ -326,14 +327,16 @@ int udp_recv(int client_fd)
 
         pmsg = (trans_data*)buf;
 
+#if LOCAL_TEST
         if(sa == pmsg->node){
             //EPT("recive from the same node address, drop packet!\n");
             continue;
         }
-
+#endif
+	
         index = pmsg->node - 1;
 
-        if((MYMAX(node_pbuf[index].seq, pmsg->seq) - MYMIN(node_pbuf[index].seq, pmsg->seq)) > 1000){
+        if((MYMAX(node_pbuf[index].seq, pmsg->seq) - MYMIN(node_pbuf[index].seq, pmsg->seq)) > 100){
             node_pbuf[index].seq = pmsg->seq;
         }
         else if(node_pbuf[index].seq > pmsg->seq){
@@ -341,10 +344,15 @@ int udp_recv(int client_fd)
             continue;
         }
 
+        //drop the first 50 packets
+        if(node_pbuf[index].seq < 50){
+            continue;
+        }
+
         pthread_mutex_lock(&recv_mutex);
 
         if(!node_pbuf[index].valid){
-            //create buffer 
+            //create buffer
             //EPT("malloc node_pbuf[%d].pdata\n", index);
             node_pbuf[index].pdata = (cyc_data_t*)malloc(CYC_DATA_SIZE);
             node_pbuf[index].valid = 1;
@@ -362,6 +370,16 @@ int udp_recv(int client_fd)
         node_pbuf[index].seq++;
         node_pbuf[index].loseq++;
 
+#if CAPDATA_TEST
+        //for capture data test
+        if(cap_flag){
+            sprintf(capdata, "\n***node-seq:%d-%d***\n\0", pmsg->node, pmsg->seq);
+            capret = write(cap_fd, capdata, strlen(capdata));
+            capret = write(cap_fd, pmsg->data, ret - HEAD_LENGTH);
+            //EPT("%d\n", capret);
+        }
+#endif
+
         //for test
         //EPT("I recvice a packet from node[%u], seq = %d ,head = %u, tail = %u, size = %u\n", (U32)pmsg->node, pmsg->seq, node_pbuf[index].pdata->head, node_pbuf[index].pdata->tail, ret - HEAD_LENGTH);
         //EPT("ret = %d, MSG_LENGTH = %lu, HEAD_LENGTH = %lu\n", ret, MSG_LENGTH, HEAD_LENGTH);
@@ -375,7 +393,7 @@ func_exit:
     return rval;
 }
 
-//playback
+//mixer and playback
 void *play_thread(void *arg)
 {
     int rval = 0, ret;
@@ -398,17 +416,6 @@ void *play_thread(void *arg)
         rval = 2;
         goto thread_return;
     }
-
-    /*
-    int file_fd;
-
-    file_fd = open("./output2.raw", O_RDWR);
-    if(file_fd == -1){
-        EPT("open file failed! %s\n", strerror(errno));
-        rval = 1;
-        goto thread_return;
-    }
-    */
 
     while(1){
         j = 0;
@@ -438,6 +445,8 @@ void *play_thread(void *arg)
                 memcpy(mix_buf[j].buf, pdata->buf[pdata->head], pdata->size[pdata->head]);
                 mix_buf[j].size = pdata->size[pdata->head];
                 j++;
+
+                //without mixer code
                 /*ret = snd_pcm_writei(handle, pdata->buf[pdata->head], pdata->size[pdata->head]/(2*CHANNEL_NUM));
                 if(ret == -EPIPE){
                     //EPIPE means underrun
@@ -465,6 +474,7 @@ void *play_thread(void *arg)
         if(ret == -EPIPE){
             //EPIPE means underrun
             EPT("underrun!\n");
+            usleep(100000);
             snd_pcm_prepare(handle);
         }
         else if(ret < 0){
@@ -511,7 +521,7 @@ int set_pcm_params(snd_pcm_t *handle)
     snd_pcm_hw_params_set_channels(handle, params, 2);
 
     //44100 bits/second sampling rate(CD quality)
-    rate = 44100;
+    rate = SAMPLE_RATE;
     snd_pcm_hw_params_set_rate_near(handle, params, &rate, &dir);
 
     //set period size to 32 frames
@@ -530,15 +540,16 @@ func_exit:
     return rval;
 }
 
+//mixer
 int Mix(int number, char *play_buf, U32 *pplay_len)
 {
     int rval = 0;
-    U32 play_len;
+    U32 play_len;       //length of play_buf
     int i, j, k;
-    char sourcefile[MIX_CHANNEL_COUNT][2];  
+    char sourcefile[MIX_CHANNEL_COUNT][2];
     char *pos;
-    short data_mix;
-    U32 ret[MIX_CHANNEL_COUNT];
+    short data_mix;     //stores 16-bits audio data which has been processed
+    U32 ret[MIX_CHANNEL_COUNT];     //indicate if the original data has been all peocessed
 
     pos = play_buf;
     play_len = 0;
@@ -556,8 +567,8 @@ int Mix(int number, char *play_buf, U32 *pplay_len)
         }
         if(j > 1){
             _Mix(sourcefile, j, (char*)&data_mix);
-            if(data_mix > pow(2,16-1) || data_mix < -pow(2,16-1))  
-                EPT("mix error\n");  
+            if(data_mix > pow(2,16-1) || data_mix < -pow(2,16-1))
+                EPT("mix error\n");
         }else if(j == 1){
             data_mix = *(short*)sourcefile[k];
         }else{
@@ -578,9 +589,9 @@ int Mix(int number, char *play_buf, U32 *pplay_len)
     return rval;
 }
 
-void _Mix(char sourseFile[MIX_CHANNEL_COUNT][SIZE_AUDIO_FRAME],int number,char *objectFile)  
-{  
-    //归一化混音  
+//归一化混音
+void _Mix(char sourseFile[MIX_CHANNEL_COUNT][SIZE_AUDIO_FRAME],int number,char *objectFile)
+{
     int const MAX=32767;
     int const MIN=-32768;
 
@@ -589,30 +600,31 @@ void _Mix(char sourseFile[MIX_CHANNEL_COUNT][SIZE_AUDIO_FRAME],int number,char *
     int i = 0,j = 0;
     for (i=0;i<SIZE_AUDIO_FRAME/2;i++)
     {
-        int temp=0;  
-        for (j=0;j<number;j++)  
-        {  
-            temp+=*(short*)(sourseFile[j]+i*2);  
-        }                  
-        output=(int)(temp*f);  
-        if (output>MAX)  
-        {  
-            f=(double)MAX/(double)(output);  
-            output=MAX;  
-        }  
-        if (output<MIN)  
-        {  
-            f=(double)MIN/(double)(output);  
-            output=MIN;  
-        }  
-        if (f<1)  
-        {  
-            f+=((double)1-f)/(double)32;  
-        }  
-        *(short*)(objectFile+i*2)=(short)output;  
-    }  
-}  
+        int temp=0;
+        for (j=0;j<number;j++)
+        {
+            temp+=*(short*)(sourseFile[j]+i*2);
+        }
+        output=(int)(temp*f);
+        if (output>MAX)
+        {
+            f=(double)MAX/(double)(output);
+            output=MAX;
+        }
+        if (output<MIN)
+        {
+            f=(double)MIN/(double)(output);
+            output=MIN;
+        }
+        if (f<1)
+        {
+            f+=((double)1-f)/(double)32;
+        }
+        *(short*)(objectFile+i*2)=(short)output;
+    }
+}
 
+//dynamic memory managment
 void dmm(int signal){
     int i;
 
@@ -633,3 +645,15 @@ void dmm(int signal){
 
     alarm(10);
 }
+
+#if CAPDATA_TEST
+void cap_data(int signal){
+    pthread_mutex_lock(&recv_mutex);
+    cap_flag = 1;
+    cap_fd = open("./capdata.log", O_RDWR | O_TRUNC | O_CREAT);
+    if(cap_fd < 0){
+        EPT("open capdata.log failed! %s\n", strerror(errno));
+    }
+    pthread_mutex_unlock(&recv_mutex);
+}
+#endif
