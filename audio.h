@@ -33,7 +33,8 @@
 #define MIX_CHANNEL_COUNT   3
 #define SIZE_AUDIO_FRAME    2
 
-#define CAL_TIME_CNT        3
+#define NOISE_CNT           50
+#define CAL_TIME_CNT        5
 
 #define LOCAL_TEST          0           //0 is local test, 1 is not.
 #define CAPDATA_TEST        0

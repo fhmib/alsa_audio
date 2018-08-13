@@ -211,7 +211,7 @@ int udp_send(int client_fd, struct sockaddr_in dest, snd_pcm_t *handle)
 
     int file_fd = 0;
     int ret;
-    int fflag;
+    int noise_flag;
 
     struct timeval rstart;
     struct timeval rend;
@@ -219,7 +219,7 @@ int udp_send(int client_fd, struct sockaddr_in dest, snd_pcm_t *handle)
     int time_flag;
     int i;
 
-    fflag = 1;
+    noise_flag = 1;
     msg.node = sa;
     msg.seq = 0;
     time_flag = 0;
@@ -246,29 +246,37 @@ int udp_send(int client_fd, struct sockaddr_in dest, snd_pcm_t *handle)
             gettimeofday(&rend, NULL);
             if(time_flag){
                 time_buf[time_flag-1] = (rend.tv_sec*1000000+rend.tv_usec) - (rstart.tv_sec*1000000+rstart.tv_usec);
-                EPT("time_buf[%d] = %u\n", time_flag-1, time_buf[time_flag-1]);
+                //EPT("time_buf[%d] = %u\n", time_flag-1, time_buf[time_flag-1]);
             }
             time_flag++;
             if(time_flag > CAL_TIME_CNT){
-                for(i = 0; i < CAL_TIME_CNT; i++){
-                    rec_period += time_buf[i];
+                rec_period = time_buf[0];
+                for(i = 1; i < CAL_TIME_CNT; i++){
+                    if(rec_period > time_buf[i])
+                        rec_period = time_buf[i];
                 }
-                rec_period /= CAL_TIME_CNT;
-                EPT("rec_period = %u\n", rec_period);
+                //EPT("rec_period = %u\n", rec_period);
                 write_enable = 1;
             }
+            gettimeofday(&rstart, NULL);
+        }else{
+            gettimeofday(&rend, NULL);
+            time_buf[0] = (rend.tv_sec*1000000+rend.tv_usec) - (rstart.tv_sec*1000000+rstart.tv_usec);
+            //EPT("time_buf[0] = %u\n", time_buf[0]);
             gettimeofday(&rstart, NULL);
         }
 
 
-        if(fflag && (msg.seq < 50)){
+        if(noise_flag && (msg.seq < NOISE_CNT)){
             msg.seq++;
             continue;
         }
 
-        fflag = 0;
+        noise_flag = 0;
 
-        //if((((int*)msg.data)[0] == 0) && (((int*)(msg.data+((ret-1)*2*CHANNEL_NUM)))[0] == 0)) continue;
+        //noise filter
+        if((((int*)msg.data)[0] == 0) && (((int*)(msg.data+((ret-1)*2*CHANNEL_NUM)))[0] == 0)) continue;
+
         rval = sendto(client_fd, &msg, (ret * 2 * CHANNEL_NUM) + HEAD_LENGTH, 0, (struct sockaddr*)&dest, len);
         //EPT("I've send msg to server, rval = %d\n", rval);
         msg.seq++;
@@ -509,11 +517,13 @@ void *play_thread(void *arg)
             if(!time_flag)break;
             gettimeofday(&pend, NULL);
             play_time = (pend.tv_sec*1000000+pend.tv_usec) - (pstart.tv_sec*1000000+pstart.tv_usec);
-            if(play_time >= (rec_period-rec_period/8)){
+            //if(play_time >= (rec_period-rec_period/8)){
+            if(play_time >= rec_period){
                 //EPT("play_time = %u\n", play_time);
                 break;
             }
         }
+        gettimeofday(&pstart, NULL);
         for(i = 0; i < 32; i++){
 
             pthread_mutex_lock(&recv_mutex);
@@ -562,8 +572,13 @@ void *play_thread(void *arg)
             pthread_mutex_unlock(&recv_mutex);
         }
 
-        if(j == 0)
+        if(j == 0){
             continue;
+            /*
+            memset(mix_buf, 0, PERIOD_BYTES);
+            mix_buf[j].size = PERIOD_BYTES;
+            j++;*/
+        }
 
 
 #if TIME_TEST_PLAY
@@ -587,7 +602,7 @@ void *play_thread(void *arg)
         if(ret == -EPIPE){
             //EPIPE means underrun
             EPT("underrun!\n");
-            usleep(100000);
+            usleep(50000);
             snd_pcm_prepare(handle);
             temp_len = play_len;
             memcpy(temp_buf, play_buf, temp_len);
@@ -601,7 +616,6 @@ void *play_thread(void *arg)
 #if TIME_TEST_PLAY
         //gettimeofday(&start, NULL);
 #endif
-        gettimeofday(&pstart, NULL);
         time_flag = 1;
     }
 
