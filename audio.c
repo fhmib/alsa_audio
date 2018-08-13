@@ -14,6 +14,9 @@ node_pbuf_t node_pbuf[32];              //buffer which stores each node's info
 mix_buf_t mix_buf[MIX_CHANNEL_COUNT];   //for mixer
 pthread_mutex_t recv_mutex;
 
+U32 rec_period;
+U8 write_enable;
+
 #if CAPDATA_TEST
 //for capture data test
 U8 cap_flag;                            //for capture socket data to file
@@ -101,6 +104,9 @@ int main_init()
 #if CAPDATA_TEST
     cap_flag = 0;
 #endif
+
+    rec_period = 0;
+    write_enable = 0;
 
     rval = pthread_mutex_init(&recv_mutex, NULL);
     if(rval){
@@ -207,9 +213,16 @@ int udp_send(int client_fd, struct sockaddr_in dest, snd_pcm_t *handle)
     int ret;
     int fflag;
 
+    struct timeval rstart;
+    struct timeval rend;
+    U32 time_buf[CAL_TIME_CNT];
+    int time_flag;
+    int i;
+
     fflag = 1;
     msg.node = sa;
     msg.seq = 0;
+    time_flag = 0;
 
     len = sizeof(dest);
 
@@ -228,6 +241,25 @@ int udp_send(int client_fd, struct sockaddr_in dest, snd_pcm_t *handle)
         else if(ret != (int)PERIOD_FRAMES){
             EPT("short read, read %d frames\n", ret);
         }
+
+        if(!write_enable){
+            gettimeofday(&rend, NULL);
+            if(time_flag){
+                time_buf[time_flag-1] = (rend.tv_sec*1000000+rend.tv_usec) - (rstart.tv_sec*1000000+rstart.tv_usec);
+                EPT("time_buf[%d] = %u\n", time_flag-1, time_buf[time_flag-1]);
+            }
+            time_flag++;
+            if(time_flag > CAL_TIME_CNT){
+                for(i = 0; i < CAL_TIME_CNT; i++){
+                    rec_period += time_buf[i];
+                }
+                rec_period /= CAL_TIME_CNT;
+                EPT("rec_period = %u\n", rec_period);
+                write_enable = 1;
+            }
+            gettimeofday(&rstart, NULL);
+        }
+
 
         if(fflag && (msg.seq < 50)){
             msg.seq++;
@@ -340,6 +372,8 @@ int udp_recv(int client_fd)
 
     len = sizeof(dest);
 
+    while(!write_enable);
+
     while(1){
 #if TIME_TEST_RECV
         gettimeofday(&start, NULL);
@@ -436,6 +470,11 @@ void *play_thread(void *arg)
     U32 temp_len = 0;
     snd_pcm_t *handle = NULL;
 
+    struct timeval pstart;
+    struct timeval pend;
+    U8 time_flag;
+    U32 play_time;
+
 #if TIME_TEST_PLAY
     int time_fd;
     char time_buf[256];
@@ -446,6 +485,7 @@ void *play_thread(void *arg)
     time_fd = open("time.log", O_RDWR | O_TRUNC | O_CREAT);
 #endif
 
+    time_flag = 0;
 
     rval = snd_pcm_open(&handle, "default", SND_PCM_STREAM_PLAYBACK, 0);
     if(rval){
@@ -461,8 +501,19 @@ void *play_thread(void *arg)
         goto thread_return;
     }
 
+    while(!write_enable);
+
     while(1){
         j = 0;
+        while(1){
+            if(!time_flag)break;
+            gettimeofday(&pend, NULL);
+            play_time = (pend.tv_sec*1000000+pend.tv_usec) - (pstart.tv_sec*1000000+pstart.tv_usec);
+            if(play_time >= (rec_period-rec_period/8)){
+                //EPT("play_time = %u\n", play_time);
+                break;
+            }
+        }
         for(i = 0; i < 32; i++){
 
             pthread_mutex_lock(&recv_mutex);
@@ -550,6 +601,8 @@ void *play_thread(void *arg)
 #if TIME_TEST_PLAY
         //gettimeofday(&start, NULL);
 #endif
+        gettimeofday(&pstart, NULL);
+        time_flag = 1;
     }
 
     rval = 0;
@@ -651,9 +704,6 @@ int Mix(int number, char *play_buf, U32 *pplay_len)
         }
 
     }
-
-    if(number == 1) usleep(230);
-    else if(number == 2) usleep(80);
 
     *pplay_len = play_len;
     return rval;
