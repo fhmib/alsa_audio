@@ -1,4 +1,5 @@
 #include "audio.h"
+#include "g726codec.h"
 
 U8 sa;      //self address
 
@@ -16,6 +17,14 @@ pthread_mutex_t recv_mutex;
 
 U32 rec_period;
 U8 write_enable;
+
+//g726
+#if ENCODE
+g726_state_t *G726Handle;
+pthread_mutex_t g726_mutex;
+char *EncBuf;
+short *DecBuf;
+#endif
 
 #if CAPDATA_TEST
 //for capture data test
@@ -75,6 +84,7 @@ int main(int argc, char *argv[])
         goto process_exit;
     }
 
+    //usleep(100000);
     sleep(1);
 
     rval = pthread_create(&recd_tid, NULL, record_thread, NULL);
@@ -117,6 +127,22 @@ int main_init()
 
     memset(node_pbuf, 0, NODE_PBUF_SIZE * 32);
 
+#if ENCODE
+    rval = G726_init(&G726Handle, RATE, PERIOD_FRAMES, &EncBuf, &DecBuf);
+    if(rval){
+        EPT("G726 initialized failed\n");
+        rval = 2;
+        goto func_exit;
+    }
+
+    rval = pthread_mutex_init(&g726_mutex, NULL);
+    if(rval){
+        EPT("recv_mutex initialized failed! %s\n", strerror(errno));
+        rval = 1;
+        goto func_exit;
+    }
+#endif
+
 func_exit:
     return rval;
 }
@@ -131,6 +157,10 @@ int main_exit(){
             node_pbuf[i].pdata = NULL;
         }
     }
+
+#if ENCODE
+    G726_free(&G726Handle, &EncBuf,&DecBuf);
+#endif
 
     return rval;
 }
@@ -208,21 +238,23 @@ int udp_send(int client_fd, struct sockaddr_in dest, snd_pcm_t *handle)
     socklen_t len;
     int rval = 0;
     trans_data msg;
+    int ret, sockret;
 
-    int file_fd = 0;
-    int ret;
+    //int file_fd = 0;
     int noise_flag;
 
+    //timeval
     struct timeval rstart;
     struct timeval rend;
     U32 time_buf[CAL_TIME_CNT];
     int time_flag;
     int i;
 
+    time_flag = 0;
     noise_flag = 1;
+
     msg.node = sa;
     msg.seq = 0;
-    time_flag = 0;
 
     len = sizeof(dest);
 
@@ -277,8 +309,24 @@ int udp_send(int client_fd, struct sockaddr_in dest, snd_pcm_t *handle)
         //noise filter
         if((((int*)msg.data)[0] == 0) && (((int*)(msg.data+((ret-1)*2*CHANNEL_NUM)))[0] == 0)) continue;
 
-        rval = sendto(client_fd, &msg, (ret * 2 * CHANNEL_NUM) + HEAD_LENGTH, 0, (struct sockaddr*)&dest, len);
-        //EPT("I've send msg to server, rval = %d\n", rval);
+#if ENCODE
+        //if(ret != PERIOD_FRAMES) EPT("ret error, ret = %d\n", ret);
+        pthread_mutex_lock(&g726_mutex);
+        ret = G726_Encode(G726Handle, msg.data, EncBuf, PERIOD_FRAMES);
+        pthread_mutex_unlock(&g726_mutex);
+        if(ret < 0 || ret == 0){
+            EPT("Encode error!\n");
+            rval = 1;
+            goto func_exit;
+        }
+        memcpy(msg.data, EncBuf, ret);
+        if(ret != PERIOD_FRAMES*RATE/8) EPT("ret length is error!!! ret = %d\n", ret);
+
+        sockret = sendto(client_fd, &msg, ret + HEAD_LENGTH, 0, (struct sockaddr*)&dest, len);
+#else
+        sockret = sendto(client_fd, &msg, (ret * 2 * CHANNEL_NUM) + HEAD_LENGTH, 0, (struct sockaddr*)&dest, len);
+#endif
+        //EPT("I've send msg to server, sockret = %d\n", sockret);
         msg.seq++;
         //usleep(1);
     }
@@ -387,13 +435,17 @@ int udp_recv(int client_fd)
         gettimeofday(&start, NULL);
 #endif
         memset(buf, 0, MSG_LENGTH);
+#if ENCODE
+        ret = recvfrom(client_fd, buf, PERIOD_FRAMES*RATE/8+HEAD_LENGTH, 0, (struct sockaddr*)&dest, &len);
+#else
         ret = recvfrom(client_fd, buf, MSG_LENGTH, 0, (struct sockaddr*)&dest, &len);
+#endif
         //EPT("receive msg, ret = %d\n", ret);
         if(ret == 0) continue;
 
         pmsg = (trans_data*)buf;
 
-#if LOCAL_TEST
+#if !LOCAL_TEST
         if(sa == pmsg->node){
             //EPT("recive from the same node address, drop packet!\n");
             continue;
@@ -415,6 +467,21 @@ int udp_recv(int client_fd)
         if(node_pbuf[index].seq < 50){
             continue;
         }*/
+
+#if ENCODE
+        if((ret-HEAD_LENGTH)!=PERIOD_FRAMES*RATE/8) EPT("ret error!ret = %d\n", ret);
+        pthread_mutex_lock(&g726_mutex);
+        ret = G726_Decode(G726Handle, pmsg->data, DecBuf, ret-HEAD_LENGTH, PERIOD_FRAMES);
+        pthread_mutex_unlock(&g726_mutex);
+        if(ret > PERIOD_BYTES){
+            EPT("data length is long\n");
+            ret = PERIOD_BYTES;
+        }
+        else if(ret < PERIOD_BYTES) EPT("data length is short, ret = %d\n", ret);
+        memcpy(pmsg->data, DecBuf, ret);
+        ret = ret + HEAD_LENGTH;
+        //EPT("ret = %d\n", ret);
+#endif
 
         pthread_mutex_lock(&recv_mutex);
 

@@ -36,7 +36,19 @@
 #define NOISE_CNT           50
 #define CAL_TIME_CNT        5
 
-#define LOCAL_TEST          0           //0 is local test, 1 is not.
+#define ENCODE              1
+/***********************************
+
+ RATE:
+ 2: 1/8 encode, 16kbps(normal use)
+ 3: 3/16 encode, 24kbps
+ 4: 1/4 encode,  32kbps(normal use)
+ 5: 5/16 encode, 40kbps
+
+**********************************/
+#define RATE                4
+
+#define LOCAL_TEST          0           //1 is local test, 0 is not.
 #define CAPDATA_TEST        0
 #define TIME_TEST_RECV      0
 #define TIME_TEST_PLAY      0
