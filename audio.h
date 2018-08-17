@@ -13,13 +13,16 @@
 #include <pthread.h>
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <net/if.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <alsa/asoundlib.h>
 
 #define SERVER_PORT         8888
-#define SERVER_IP           "255.255.255.255"
+#define SERVER_IP           "192.168.0.255"
 //#define SERVER_IP           "192.168.0.66"
+
+#define NETDEV_NAME         "tap0"
 
 #define BUFFER_SIZE         32           //size of cyclic buffer
 //#define SAMPLE_RATE         44100
@@ -48,6 +51,9 @@
 **********************************/
 #define RATE                4
 
+#define RECORD_MODE         0
+#define PLAYBACK_MODE       0
+#define FILE_TEST           0
 #define LOCAL_TEST          0           //1 is local test, 0 is not.
 #define CAPDATA_TEST        0
 #define TIME_TEST_RECV      0

@@ -16,7 +16,12 @@ mix_buf_t mix_buf[MIX_CHANNEL_COUNT];   //for mixer
 pthread_mutex_t recv_mutex;
 
 U32 rec_period;
-U8 write_enable;
+U8 recv_enable;
+
+#if FILE_TEST
+int file_fd;
+char ftest_buf[64];
+#endif
 
 //g726
 #if ENCODE
@@ -70,6 +75,7 @@ int main(int argc, char *argv[])
 #endif
     alarm(10);
 
+#if !RECORD_MODE
     rval = pthread_create(&recv_tid, NULL, recv_thread, NULL);
     if(rval != 0){
         EPT("create receivce thread failed!\n");
@@ -83,16 +89,19 @@ int main(int argc, char *argv[])
         rval = 1;
         goto process_exit;
     }
+#endif
 
     //usleep(100000);
     sleep(1);
 
+#if !PLAYBACK_MODE
     rval = pthread_create(&recd_tid, NULL, record_thread, NULL);
     if(rval != 0){
         EPT("create record thread failed!\n");
         rval = 1;
         goto process_exit;
     }
+#endif
 
     pthread_mutex_lock(&tshare.mutex);
     while(0 == stop){
@@ -115,8 +124,17 @@ int main_init()
     cap_flag = 0;
 #endif
 
+#if FILE_TEST
+    file_fd  = open("./testlog", O_RDWR | O_CREAT | O_TRUNC);
+    if(file_fd < 0){
+        EPT("open testlog error! %s\n", strerror(errno));
+        rval = 1;
+        goto func_exit;
+    }
+#endif
+
     rec_period = 0;
-    write_enable = 0;
+    recv_enable = 0;
 
     rval = pthread_mutex_init(&recv_mutex, NULL);
     if(rval){
@@ -213,6 +231,7 @@ int socket_create_cli(int *fd, struct sockaddr_in *dest)
 {
     int rval = 0;
     int optval = 1;
+    struct ifreq ifr;
 
     *fd = socket(AF_INET, SOCK_DGRAM, 0);
     if(fd < 0){
@@ -221,6 +240,10 @@ int socket_create_cli(int *fd, struct sockaddr_in *dest)
         goto func_exit;
     }
 
+    memset(&ifr, 0, sizeof(ifr));
+    strncpy(ifr.ifr_name, NETDEV_NAME, strlen(NETDEV_NAME));
+
+    setsockopt(*fd, SOL_SOCKET, SO_BROADCAST | SO_REUSEADDR, (char*)&ifr, sizeof(ifr));
     setsockopt(*fd, SOL_SOCKET, SO_BROADCAST | SO_REUSEADDR, &optval, sizeof(int));
 
     memset(dest, 0, sizeof(struct sockaddr_in));
@@ -244,13 +267,13 @@ int udp_send(int client_fd, struct sockaddr_in dest, snd_pcm_t *handle)
     int noise_flag;
 
     //timeval
-    struct timeval rstart;
-    struct timeval rend;
-    U32 time_buf[CAL_TIME_CNT];
-    int time_flag;
-    int i;
+    //struct timeval rstart;
+    //struct timeval rend;
+    //U32 time_buf[CAL_TIME_CNT];
+    //int time_flag;
+    //int i;
 
-    time_flag = 0;
+    //time_flag = 0;
     noise_flag = 1;
 
     msg.node = sa;
@@ -274,11 +297,12 @@ int udp_send(int client_fd, struct sockaddr_in dest, snd_pcm_t *handle)
             EPT("short read, read %d frames\n", ret);
         }
 
+        /*
         if(!write_enable){
             gettimeofday(&rend, NULL);
             if(time_flag){
                 time_buf[time_flag-1] = (rend.tv_sec*1000000+rend.tv_usec) - (rstart.tv_sec*1000000+rstart.tv_usec);
-                //EPT("time_buf[%d] = %u\n", time_flag-1, time_buf[time_flag-1]);
+                EPT("time_buf[%d] = %u\n", time_flag-1, time_buf[time_flag-1]);
             }
             time_flag++;
             if(time_flag > CAL_TIME_CNT){
@@ -287,7 +311,7 @@ int udp_send(int client_fd, struct sockaddr_in dest, snd_pcm_t *handle)
                     if(rec_period > time_buf[i])
                         rec_period = time_buf[i];
                 }
-                //EPT("rec_period = %u\n", rec_period);
+                EPT("rec_period = %u\n", rec_period);
                 write_enable = 1;
             }
             gettimeofday(&rstart, NULL);
@@ -297,6 +321,7 @@ int udp_send(int client_fd, struct sockaddr_in dest, snd_pcm_t *handle)
             //EPT("time_buf[0] = %u\n", time_buf[0]);
             gettimeofday(&rstart, NULL);
         }
+        */
 
 
         if(noise_flag && (msg.seq < NOISE_CNT)){
@@ -323,9 +348,13 @@ int udp_send(int client_fd, struct sockaddr_in dest, snd_pcm_t *handle)
         if(ret != PERIOD_FRAMES*RATE/8) EPT("ret length is error!!! ret = %d\n", ret);
 
         sockret = sendto(client_fd, &msg, ret + HEAD_LENGTH, 0, (struct sockaddr*)&dest, len);
+        //EPT("sendto here!\n");
 #else
         sockret = sendto(client_fd, &msg, (ret * 2 * CHANNEL_NUM) + HEAD_LENGTH, 0, (struct sockaddr*)&dest, len);
 #endif
+
+        if(sockret < 0)
+            EPT("sendto error! %s\n", strerror(errno));
         //EPT("I've send msg to server, sockret = %d\n", sockret);
         msg.seq++;
         //usleep(1);
@@ -428,7 +457,7 @@ int udp_recv(int client_fd)
 
     len = sizeof(dest);
 
-    while(!write_enable);
+    while(!recv_enable);
 
     while(1){
 #if TIME_TEST_RECV
@@ -496,6 +525,9 @@ int udp_recv(int client_fd)
 
         cyc_data = node_pbuf[index].pdata;
 
+#if FILE_TEST
+        //write(file_fd, pmsg->data, ret-HEAD_LENGTH);
+#endif
         memcpy(cyc_data->buf[cyc_data->tail], pmsg->data, AUDIO_DATA_SIZE);
         cyc_data->size[cyc_data->tail] = ret - HEAD_LENGTH;
         if(cyc_data->tail == BUFFER_SIZE - 1) cyc_data->tail = 0;
@@ -509,7 +541,7 @@ int udp_recv(int client_fd)
         if(cap_flag){
             sprintf(capdata, "\n***node-seq:%d-%d***\n\0", pmsg->node, pmsg->seq);
             capret = write(cap_fd, capdata, strlen(capdata));
-            capret = write(cap_fd, pmsg->data, ret - HEAD_LENGTH);
+            //capret = write(cap_fd, pmsg->data, ret - HEAD_LENGTH);
             //EPT("%d\n", capret);
         }
 #endif
@@ -576,7 +608,7 @@ void *play_thread(void *arg)
         goto thread_return;
     }
 
-    while(!write_enable);
+    recv_enable = 1;
 
     while(1){
         j = 0;
@@ -591,6 +623,7 @@ void *play_thread(void *arg)
             }
         }
         gettimeofday(&pstart, NULL);
+
         for(i = 0; i < 32; i++){
 
             pthread_mutex_lock(&recv_mutex);
@@ -664,6 +697,19 @@ void *play_thread(void *arg)
             temp_len = 0;
         }
 
+#if FILE_TEST
+        sprintf(ftest_buf, "123j=%d\0", j);
+        write(file_fd, ftest_buf, strlen(ftest_buf));
+        write(file_fd, play_buf, play_len);
+#endif
+        //memset(play_buf, 0x7f, play_len);
+        /*
+        for(i = 0; i < play_len/4; i++){
+            *(play_buf+4*i) = 0x7f;
+            *(play_buf+4*i+1) = 0x7f;
+        }
+        */
+
         ret = snd_pcm_writei(handle, play_buf, (int)(play_len/(2*CHANNEL_NUM)));
         //EPT("ret = %d, play_len = %d , j = %d\n", ret, play_len, j);
         if(ret == -EPIPE){
@@ -705,6 +751,8 @@ int set_pcm_params(snd_pcm_t *handle)
     U32 rate;
     int dir;
 
+    U32 time;
+
     //Allocate a hardware parameters object
     snd_pcm_hw_params_alloca(&params);
 
@@ -736,6 +784,9 @@ int set_pcm_params(snd_pcm_t *handle)
         rval = 1;
         goto func_exit;
     }
+
+    snd_pcm_hw_params_get_period_time(params, &rec_period, NULL);
+    EPT("rec_period = %u\n", rec_period);
 
 func_exit:
     return rval;
