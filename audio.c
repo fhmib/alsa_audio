@@ -1,5 +1,4 @@
 #include "audio.h"
-#include "g726codec.h"
 
 U8 sa;      //self address
 
@@ -25,10 +24,8 @@ char ftest_buf[64];
 
 //g726
 #if ENCODE
-g726_state_t *G726Handle;
-pthread_mutex_t g726_mutex;
+g726_state_t *REC_G726Handle;
 char *EncBuf;
-short *DecBuf;
 #endif
 
 #if CAPDATA_TEST
@@ -145,22 +142,6 @@ int main_init()
 
     memset(node_pbuf, 0, NODE_PBUF_SIZE * 32);
 
-#if ENCODE
-    rval = G726_init(&G726Handle, RATE, PERIOD_FRAMES, &EncBuf, &DecBuf);
-    if(rval){
-        EPT("G726 initialized failed\n");
-        rval = 2;
-        goto func_exit;
-    }
-
-    rval = pthread_mutex_init(&g726_mutex, NULL);
-    if(rval){
-        EPT("recv_mutex initialized failed! %s\n", strerror(errno));
-        rval = 1;
-        goto func_exit;
-    }
-#endif
-
 func_exit:
     return rval;
 }
@@ -177,7 +158,7 @@ int main_exit(){
     }
 
 #if ENCODE
-    G726_free(&G726Handle, &EncBuf,&DecBuf);
+    rec_G726_free(&REC_G726Handle, &EncBuf);
 #endif
 
     return rval;
@@ -213,6 +194,15 @@ void *record_thread(void *arg)
         rval = 2;
         goto thread_return;
     }
+
+#if ENCODE
+    rval = rec_G726_init(&REC_G726Handle, RATE, PERIOD_FRAMES, &EncBuf);
+    if(rval){
+        EPT("REC_G726 initialized failed\n");
+        rval = 3;
+        goto thread_return;
+    }
+#endif
 
     //socket send
     rval = udp_send(client_fd, dest, handle);
@@ -336,9 +326,7 @@ int udp_send(int client_fd, struct sockaddr_in dest, snd_pcm_t *handle)
 
 #if ENCODE
         //if(ret != PERIOD_FRAMES) EPT("ret error, ret = %d\n", ret);
-        pthread_mutex_lock(&g726_mutex);
-        ret = G726_Encode(G726Handle, msg.data, EncBuf, PERIOD_FRAMES);
-        pthread_mutex_unlock(&g726_mutex);
+        ret = G726_Encode(REC_G726Handle, msg.data, EncBuf, PERIOD_FRAMES);
         if(ret < 0 || ret == 0){
             EPT("Encode error!\n");
             rval = 1;
@@ -497,21 +485,6 @@ int udp_recv(int client_fd)
             continue;
         }*/
 
-#if ENCODE
-        if((ret-HEAD_LENGTH)!=PERIOD_FRAMES*RATE/8) EPT("ret error!ret = %d\n", ret);
-        pthread_mutex_lock(&g726_mutex);
-        ret = G726_Decode(G726Handle, pmsg->data, DecBuf, ret-HEAD_LENGTH, PERIOD_FRAMES);
-        pthread_mutex_unlock(&g726_mutex);
-        if(ret > PERIOD_BYTES){
-            EPT("data length is long\n");
-            ret = PERIOD_BYTES;
-        }
-        else if(ret < PERIOD_BYTES) EPT("data length is short, ret = %d\n", ret);
-        memcpy(pmsg->data, DecBuf, ret);
-        ret = ret + HEAD_LENGTH;
-        //EPT("ret = %d\n", ret);
-#endif
-
         pthread_mutex_lock(&recv_mutex);
 
         if(!node_pbuf[index].valid){
@@ -521,9 +494,25 @@ int udp_recv(int client_fd)
             node_pbuf[index].valid = 1;
             node_pbuf[index].pdata->head = 0;
             node_pbuf[index].pdata->tail = 1;
+#if ENCODE
+            rval = play_G726_init(&node_pbuf[index].g726handle, RATE, PERIOD_FRAMES, &node_pbuf[index].DecBuf);
+#endif
         }
 
         cyc_data = node_pbuf[index].pdata;
+
+#if ENCODE
+        if((ret-HEAD_LENGTH)!=PERIOD_FRAMES*RATE/8) EPT("ret error!ret = %d\n", ret);
+        ret = G726_Decode(node_pbuf[index].g726handle, pmsg->data, node_pbuf[index].DecBuf, ret-HEAD_LENGTH, PERIOD_FRAMES);
+        if(ret > PERIOD_BYTES){
+            EPT("data length is long\n");
+            ret = PERIOD_BYTES;
+        }
+        else if(ret < PERIOD_BYTES) EPT("data length is short, ret = %d\n", ret);
+        memcpy(pmsg->data, node_pbuf[index].DecBuf, ret);
+        ret = ret + HEAD_LENGTH;
+        //EPT("ret = %d\n", ret);
+#endif
 
 #if FILE_TEST
         //write(file_fd, pmsg->data, ret-HEAD_LENGTH);
@@ -620,6 +609,9 @@ void *play_thread(void *arg)
             if(play_time >= rec_period){
                 //EPT("play_time = %u\n", play_time);
                 break;
+            }
+            else if((rec_period-play_time)>1000){
+                usleep(rec_period-play_time-1000);
             }
         }
         gettimeofday(&pstart, NULL);
@@ -884,8 +876,12 @@ void dmm(int signal){
     for(i = 0; i < 32; i++){
         if(node_pbuf[i].valid){
             if(!node_pbuf[i].loseq){
-                //EPT("free node_pbuf[%d].pdata\n", i);
+                EPT("free node_pbuf[%d].pdata\n", i);
                 free(node_pbuf[i].pdata);
+#if ENCODE
+                free(node_pbuf[i].g726handle);
+                free(node_pbuf[i].DecBuf);
+#endif
                 node_pbuf[i].pdata = NULL;
                 node_pbuf[i].valid = 0;
             }else{

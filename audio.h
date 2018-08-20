@@ -18,6 +18,8 @@
 #include <arpa/inet.h>
 #include <alsa/asoundlib.h>
 
+#include "g726codec.h"
+
 #define SERVER_PORT         8888
 #define SERVER_IP           "192.168.0.255"
 //#define SERVER_IP           "192.168.0.66"
@@ -51,13 +53,13 @@
 **********************************/
 #define RATE                4
 
-#define RECORD_MODE         0
-#define PLAYBACK_MODE       0
-#define FILE_TEST           0
+#define RECORD_MODE         0           //if open, only record and sending
+#define PLAYBACK_MODE       0           //if open, only receiving and playback
+#define FILE_TEST           0           //capture data to file
 #define LOCAL_TEST          0           //1 is local test, 0 is not.
-#define CAPDATA_TEST        0
-#define TIME_TEST_RECV      0
-#define TIME_TEST_PLAY      0
+#define CAPDATA_TEST        0           //capture data to file through signal action
+#define TIME_TEST_RECV      0           //calculate time of receiving
+#define TIME_TEST_PLAY      0           //calculate time of playback
 
 #define EPT(format, ...)    do{\
                                 char _pstr[512];\
@@ -83,6 +85,10 @@ typedef struct _node_pbuf_t{
     U8 valid;
     U32 seq;
     U32 loseq;
+#if ENCODE
+    g726_state_t *g726handle;
+    short *DecBuf;
+#endif
     cyc_data_t *pdata;
 }node_pbuf_t;
 #define NODE_PBUF_SIZE      sizeof(node_pbuf_t)

@@ -209,8 +209,9 @@ int g726_decode(g726_state_t *s, short amp[], const unsigned char g726_data[], i
 int g726_encode(g726_state_t *s, unsigned char g726_data[], const short amp[], int len);
 void Exchange32_16(char* Buf,int len);
 void Exchange16_32(short* Buf,int len);
-int G726_init(g726_state_t** G726Handle,unsigned int rate,int frame,char** EncBuf,short** DecBuf);
-void G726_free(g726_state_t** G726Handle, char** EncBuf,short** DecBuf);
+int rec_G726_init(g726_state_t** G726Handle,unsigned int rate,int frame,char** EncBuf);
+int play_G726_init(g726_state_t** G726Handle,unsigned int rate,int frame,short** DecBuf);
+void rec_G726_free(g726_state_t** G726Handle, char** EncBuf);
 int G726_Encode(g726_state_t* G726Handle,char* srcBuf,char *EncBuf,int frame);
 int G726_Decode(g726_state_t* G726Handle,char* srcBuf,short *DecBuf,int len,int frame);
 

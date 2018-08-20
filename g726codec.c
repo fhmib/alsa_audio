@@ -910,7 +910,37 @@ void Exchange16_32(short* Buf,int len)
 *
 * @return  -1:fail 0:sucess 
 */
-int G726_init(g726_state_t** G726Handle,unsigned int rate,int frame,char** EncBuf,short** DecBuf)
+int rec_G726_init(g726_state_t** G726Handle,unsigned int rate,int frame,char** EncBuf)
+{
+ 
+   if(rate < 2 || rate > 5)
+     {
+        printf("rate error,input range 2-5\n");
+        return -1;
+     }
+  /*init G726 handle */
+   *G726Handle = (g726_state_t*)malloc(sizeof(g726_state_t));
+ 
+   *G726Handle = g726_init(*G726Handle,rate*8000);
+  
+   *EncBuf = (char *)malloc(sizeof(char) * frame * rate/8);
+    memset(*EncBuf,0,frame*rate/8);
+    
+    return 0;
+}
+
+/**
+* @brief 
+*
+* @param G726Handle  init G726 En/Decode param
+* @param rate    2:16bit,3:24bit,4:32bit,5:40bit
+* @param frame  
+* @param EncBuf  Encode Buffer 
+* @param DecBuf  Decode Buffer
+*
+* @return  -1:fail 0:sucess 
+*/
+int play_G726_init(g726_state_t** G726Handle,unsigned int rate,int frame, short** DecBuf)
 {
  
    if(rate < 2 || rate > 5)
@@ -927,9 +957,6 @@ int G726_init(g726_state_t** G726Handle,unsigned int rate,int frame,char** EncBu
    *DecBuf = (short *)malloc(sizeof(short) * frame * 2);
    memset(*DecBuf,0,frame*4);
   
-   *EncBuf = (char *)malloc(sizeof(char) * frame * rate/8);
-    memset(*EncBuf,0,frame*rate/8);
-    
   return 0;
 }
 
@@ -941,7 +968,7 @@ int G726_init(g726_state_t** G726Handle,unsigned int rate,int frame,char** EncBu
 * @param EncBuf
 * @param DecBuf
 */
-void G726_free(g726_state_t** G726Handle, char** EncBuf,short** DecBuf)
+void rec_G726_free(g726_state_t** G726Handle, char** EncBuf)
 {
     if(*G726Handle != NULL)
     {
@@ -952,11 +979,6 @@ void G726_free(g726_state_t** G726Handle, char** EncBuf,short** DecBuf)
     {
       free(*EncBuf);
       *EncBuf = NULL;
-    }
-   if(*DecBuf != NULL)
-    {
-      free(*DecBuf);
-      *DecBuf = NULL;
     }
 }
 
