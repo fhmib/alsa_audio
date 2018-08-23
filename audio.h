@@ -22,6 +22,7 @@
 
 #define SERVER_PORT         8888
 #define SERVER_IP           "192.168.0.255"
+//#define SERVER_IP           "127.0.0.1"
 //#define SERVER_IP           "192.168.0.66"
 
 #define NETDEV_NAME         "tap0"

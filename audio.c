@@ -17,6 +17,9 @@ pthread_mutex_t recv_mutex;
 U32 rec_period;
 U8 recv_enable;
 
+U8 node_list[32];
+U8 mix_count;
+
 #if FILE_TEST
 int file_fd;
 char ftest_buf[64];
@@ -141,6 +144,8 @@ int main_init()
     }
 
     memset(node_pbuf, 0, NODE_PBUF_SIZE * 32);
+
+    mix_count = 0;
 
 func_exit:
     return rval;
@@ -422,6 +427,8 @@ int udp_recv(int client_fd)
     struct sockaddr_in dest;
     int rval = 0, ret;
     char buf[MSG_LENGTH];
+    U8 m_flag = 0;
+    int i;
 
 #if CAPDATA_TEST
     char capdata[MSG_LENGTH];
@@ -468,6 +475,23 @@ int udp_recv(int client_fd)
             continue;
         }
 #endif
+
+        pthread_mutex_lock(&recv_mutex);
+
+        if(mix_count >= MIX_CHANNEL_COUNT){
+            for(i = 0; i < MIX_CHANNEL_COUNT; i++){
+                if(node_list[i] == pmsg->node){
+                    m_flag = 1;
+                    break;
+                }
+            }
+            if(!m_flag){
+                //EPT("mixer is full, drop packet from node %d!\n", pmsg->node);
+                pthread_mutex_unlock(&recv_mutex);
+                continue;
+            }
+            m_flag = 0;
+        }
 	
         index = pmsg->node - 1;
 
@@ -476,6 +500,7 @@ int udp_recv(int client_fd)
         }
         else if(node_pbuf[index].seq > pmsg->seq){
             EPT("drop unsequence packet!\n");
+            pthread_mutex_unlock(&recv_mutex);
             continue;
         }
 
@@ -484,8 +509,6 @@ int udp_recv(int client_fd)
         if(node_pbuf[index].seq < 50){
             continue;
         }*/
-
-        pthread_mutex_lock(&recv_mutex);
 
         if(!node_pbuf[index].valid){
             //create buffer
@@ -641,6 +664,7 @@ void *play_thread(void *arg)
                 }
                 memcpy(mix_buf[j].buf, pdata->buf[pdata->head], pdata->size[pdata->head]);
                 mix_buf[j].size = pdata->size[pdata->head];
+                node_list[j] = i + 1;
                 j++;
 
                 //without mixer code
@@ -665,12 +689,14 @@ void *play_thread(void *arg)
         }
 
         if(j == 0){
+            mix_count = 0;
             continue;
             /*
             memset(mix_buf, 0, PERIOD_BYTES);
             mix_buf[j].size = PERIOD_BYTES;
             j++;*/
         }
+        mix_count = j;
 
 
 #if TIME_TEST_PLAY
