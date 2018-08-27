@@ -21,9 +21,13 @@
 
 #include "g726codec.h"
 
+#define BROADCAST           1
 #define SERVER_PORT         8888
+#if BROADCAST
 #define SERVER_IP           "192.168.0.255"
+#else
 #define GROUP_IP            "224.0.1.129"
+#endif
 //#define SERVER_IP           "192.168.0.66"
 
 #define NETDEV_NAME         "tap0"
@@ -42,6 +46,7 @@
 
 #define NOISE_CNT           50
 #define CAL_TIME_CNT        5
+#define MIX_CHANNEL_COUNT   3
 
 #define ENCODE              1
 /***********************************
@@ -53,13 +58,12 @@
  5: 5/16 encode, 40kbps
 
 **********************************/
-#define RATE                4
+#define RATE                2
 
-#define BROADCAST           0
 #define RECORD_MODE         0           //if open, only record and sending
 #define PLAYBACK_MODE       0           //if open, only receiving and playback
 #define FILE_TEST           0           //capture data to file
-#define LOCAL_TEST          1           //1 is local test, 0 is not.
+#define LOCAL_TEST          0           //1 is local test, 0 is not.
 #define CAPDATA_TEST        0           //capture data to file through signal action
 #define TIME_TEST_RECV      0           //calculate time of receiving
 #define TIME_TEST_PLAY      0           //calculate time of playback
