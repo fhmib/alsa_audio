@@ -924,7 +924,7 @@ int rec_G726_init(g726_state_t** G726Handle,unsigned int rate,int frame,char** E
    *G726Handle = g726_init(*G726Handle,rate*8000);
   
    *EncBuf = (char *)malloc(sizeof(char) * frame * rate/8);
-    memset(*EncBuf,0,frame*rate/8);
+    //memset(*EncBuf,0,frame*rate/8);
     
     return 0;
 }
@@ -954,8 +954,8 @@ int play_G726_init(g726_state_t** G726Handle,unsigned int rate,int frame, short*
    *G726Handle = g726_init(*G726Handle,rate*8000);
   
    /*malloc encode buffer and decode buffer */
-   *DecBuf = (short *)malloc(sizeof(short) * frame * 2);
-   memset(*DecBuf,0,frame*4);
+   *DecBuf = (short *)malloc(sizeof(short) * frame);
+   //memset(*DecBuf,0,frame*4);
   
   return 0;
 }
@@ -997,7 +997,7 @@ int G726_Encode(g726_state_t* G726Handle,char* srcBuf,char *EncBuf,int frame)
    int iRet;
    int i;
 
-    Exchange32_16(srcBuf,frame);
+    //Exchange32_16(srcBuf,frame);
 	
     iRet = g726_encode(G726Handle,EncBuf,(short*)srcBuf, frame);
    
@@ -1024,13 +1024,13 @@ int G726_Decode(g726_state_t* G726Handle,char* srcBuf,short *DecBuf,int len,int 
 
    int iRet;
    
-   memset(DecBuf,0,frame*4);
+   //memset(DecBuf,0,frame*4);
    iRet = g726_decode(G726Handle,DecBuf,srcBuf,len);
   
    if(iRet > 0)
       {
-         Exchange16_32(DecBuf,frame);
-         return 4*iRet;
+         //Exchange16_32(DecBuf,frame);
+         return 2*iRet;
       }
   else
      return 0;

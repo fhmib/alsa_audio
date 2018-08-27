@@ -17,11 +17,13 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <alsa/asoundlib.h>
+#include <netdb.h>
 
 #include "g726codec.h"
 
 #define SERVER_PORT         8888
 #define SERVER_IP           "192.168.0.255"
+#define GROUP_IP            "224.0.1.129"
 //#define SERVER_IP           "192.168.0.66"
 
 #define NETDEV_NAME         "tap0"
@@ -29,8 +31,8 @@
 #define BUFFER_SIZE         32           //size of cyclic buffer
 //#define SAMPLE_RATE         44100
 #define SAMPLE_RATE         8000
-#define PERIOD_FRAMES       256          //number of frames with a period
-#define CHANNEL_NUM         2
+#define PERIOD_FRAMES       400          //number of frames with a period
+#define CHANNEL_NUM         1
 #define PERIOD_BYTES        (2*PERIOD_FRAMES*CHANNEL_NUM)
 #define TRANS_DATA_SIZE     (PERIOD_BYTES * 1)
 #define AUDIO_DATA_SIZE     TRANS_DATA_SIZE
@@ -53,10 +55,11 @@
 **********************************/
 #define RATE                4
 
+#define BROADCAST           0
 #define RECORD_MODE         0           //if open, only record and sending
 #define PLAYBACK_MODE       0           //if open, only receiving and playback
 #define FILE_TEST           0           //capture data to file
-#define LOCAL_TEST          0           //1 is local test, 0 is not.
+#define LOCAL_TEST          1           //1 is local test, 0 is not.
 #define CAPDATA_TEST        0           //capture data to file through signal action
 #define TIME_TEST_RECV      0           //calculate time of receiving
 #define TIME_TEST_PLAY      0           //calculate time of playback

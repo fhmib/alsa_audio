@@ -233,12 +233,20 @@ int socket_create_cli(int *fd, struct sockaddr_in *dest)
     memset(&ifr, 0, sizeof(ifr));
     strncpy(ifr.ifr_name, NETDEV_NAME, strlen(NETDEV_NAME));
 
+#if BROADCAST
     setsockopt(*fd, SOL_SOCKET, SO_BROADCAST | SO_REUSEADDR, (char*)&ifr, sizeof(ifr));
     setsockopt(*fd, SOL_SOCKET, SO_BROADCAST | SO_REUSEADDR, &optval, sizeof(int));
+#else
+    setsockopt(*fd, SOL_SOCKET, SO_BINDTODEVICE, (char *)&ifr, sizeof(ifr));
+#endif
 
     memset(dest, 0, sizeof(struct sockaddr_in));
     dest->sin_family = AF_INET;
+#if BROADCAST
     dest->sin_addr.s_addr = inet_addr(SERVER_IP);
+#else
+    dest->sin_addr.s_addr = inet_addr(GROUP_IP);
+#endif
     dest->sin_port = htons(SERVER_PORT);
 
 func_exit:
@@ -322,7 +330,9 @@ int udp_send(int client_fd, struct sockaddr_in dest, snd_pcm_t *handle)
         noise_flag = 0;
 
         //noise filter
-        if((((int*)msg.data)[0] == 0) && (((int*)(msg.data+((ret-1)*2*CHANNEL_NUM)))[0] == 0)) continue;
+        if((((short*)msg.data)[0] == 0) && (((short*)(msg.data+((ret-1)*2*CHANNEL_NUM)))[0] == 0)){
+            continue;
+        }
 
 #if ENCODE
         //if(ret != PERIOD_FRAMES) EPT("ret error, ret = %d\n", ret);
@@ -339,6 +349,12 @@ int udp_send(int client_fd, struct sockaddr_in dest, snd_pcm_t *handle)
         //EPT("sendto here!\n");
 #else
         sockret = sendto(client_fd, &msg, (ret * 2 * CHANNEL_NUM) + HEAD_LENGTH, 0, (struct sockaddr*)&dest, len);
+#endif
+
+#if FILE_TEST
+        sprintf(ftest_buf, "000\0");
+        write(file_fd, ftest_buf, strlen(ftest_buf));
+        write(file_fd, msg.data, ret * 2 * CHANNEL_NUM);
 #endif
 
         if(sockret < 0)
@@ -387,6 +403,24 @@ int socket_create_ser(int *fd, struct sockaddr_in *src)
 {
     int rval = 0;
     int optval = 1;
+#if !BROADCAST
+    struct in_addr ia;
+    struct ip_mreq mreq;
+    struct hostent *group;
+    char ipaddr[16];
+
+    bzero(&mreq, sizeof(struct ip_mreq));
+    if((group = gethostbyname(GROUP_IP)) == (struct hostent*)0){
+        EPT("gethostbyname error. %s\n", strerror(errno));
+        rval = 1;
+        goto func_exit;
+    }
+    bcopy((void*)group->h_addr, (void*)&ia, group->h_length);
+    bcopy(&ia, &mreq.imr_multiaddr.s_addr, sizeof(struct in_addr));
+    //mreq.imr_interface.s_addr = htonl(INADDR_ANY);
+    sprintf(ipaddr, "192.168.0.%d", sa);
+    mreq.imr_interface.s_addr = inet_addr(ipaddr);
+#endif
 
     *fd = socket(AF_INET, SOCK_DGRAM, 0);
     if(fd < 0){
@@ -395,11 +429,27 @@ int socket_create_ser(int *fd, struct sockaddr_in *src)
         goto func_exit;
     }
 
+#if BROADCAST
+    //broadcast
     setsockopt(*fd, SOL_SOCKET, SO_BROADCAST | SO_REUSEADDR, &optval, sizeof(int));
+#else
+    if(setsockopt(*fd, IPPROTO_IP, IP_ADD_MEMBERSHIP, &mreq, sizeof(struct ip_mreq)) == -1){
+        perror("setsockopt");
+        exit(-1);
+    }
+#endif
 
     memset(src, 0, sizeof(struct sockaddr_in));
     src->sin_family = AF_INET;
+#if BROADCAST
     src->sin_addr.s_addr = htonl(INADDR_ANY);
+#else
+    if(inet_pton(AF_INET, GROUP_IP, &src->sin_addr) <= 0) {
+        printf("Wrong dest IP address!\n");
+        rval = 2;
+        goto func_exit;
+    }
+#endif
     src->sin_port = htons(SERVER_PORT);
 
     rval = bind(*fd, (struct sockaddr*)src, sizeof(struct sockaddr));
@@ -690,9 +740,11 @@ void *play_thread(void *arg)
         }
 
 #if FILE_TEST
+        /*
         sprintf(ftest_buf, "123j=%d\0", j);
         write(file_fd, ftest_buf, strlen(ftest_buf));
         write(file_fd, play_buf, play_len);
+        */
 #endif
         //memset(play_buf, 0x7f, play_len);
         /*
@@ -707,7 +759,7 @@ void *play_thread(void *arg)
         if(ret == -EPIPE){
             //EPIPE means underrun
             EPT("underrun!\n");
-            usleep(50000);
+            //usleep(50000);
             snd_pcm_prepare(handle);
             temp_len = play_len;
             memcpy(temp_buf, play_buf, temp_len);
@@ -759,7 +811,7 @@ int set_pcm_params(snd_pcm_t *handle)
     snd_pcm_hw_params_set_format(handle, params, SND_PCM_FORMAT_S16_LE);
 
     //single channel
-    snd_pcm_hw_params_set_channels(handle, params, 2);
+    snd_pcm_hw_params_set_channels(handle, params, CHANNEL_NUM);
 
     //44100 bits/second sampling rate(CD quality)
     rate = SAMPLE_RATE;
