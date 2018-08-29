@@ -21,7 +21,9 @@
 
 #include "g726codec.h"
 
-#define BROADCAST           1
+#define BROADCAST           0
+#define UNICAST             0
+#define MULTICAST           1
 #define SERVER_PORT         8888
 #if BROADCAST
 #define SERVER_IP           "192.168.0.255"
@@ -58,7 +60,7 @@
  5: 5/16 encode, 40kbps
 
 **********************************/
-#define RATE                2
+#define RATE                4
 
 #define RECORD_MODE         0           //if open, only record and sending
 #define PLAYBACK_MODE       0           //if open, only receiving and playback

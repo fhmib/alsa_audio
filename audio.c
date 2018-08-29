@@ -238,18 +238,16 @@ int socket_create_cli(int *fd, struct sockaddr_in *dest)
     memset(&ifr, 0, sizeof(ifr));
     strncpy(ifr.ifr_name, NETDEV_NAME, strlen(NETDEV_NAME));
 
+    setsockopt(*fd, SOL_SOCKET, SO_BINDTODEVICE, (char*)&ifr, sizeof(ifr));
 #if BROADCAST
-    setsockopt(*fd, SOL_SOCKET, SO_BROADCAST | SO_REUSEADDR, (char*)&ifr, sizeof(ifr));
     setsockopt(*fd, SOL_SOCKET, SO_BROADCAST | SO_REUSEADDR, &optval, sizeof(int));
-#else
-    setsockopt(*fd, SOL_SOCKET, SO_BINDTODEVICE, (char *)&ifr, sizeof(ifr));
 #endif
 
     memset(dest, 0, sizeof(struct sockaddr_in));
     dest->sin_family = AF_INET;
 #if BROADCAST
     dest->sin_addr.s_addr = inet_addr(SERVER_IP);
-#else
+#elif MULTICAST
     dest->sin_addr.s_addr = inet_addr(GROUP_IP);
 #endif
     dest->sin_port = htons(SERVER_PORT);
@@ -274,7 +272,11 @@ int udp_send(int client_fd, struct sockaddr_in dest, snd_pcm_t *handle)
     //struct timeval rend;
     //U32 time_buf[CAL_TIME_CNT];
     //int time_flag;
-    //int i;
+    int i;
+#if UNICAST
+    char dest_addr[16];
+    U8 destid = 1;
+#endif
 
     //time_flag = 0;
     noise_flag = 1;
@@ -350,14 +352,34 @@ int udp_send(int client_fd, struct sockaddr_in dest, snd_pcm_t *handle)
         memcpy(msg.data, EncBuf, ret);
         if(ret != PERIOD_FRAMES*RATE/8) EPT("ret length is error!!! ret = %d\n", ret);
 
+#if UNICAST
+        for(i = 0, destid = 1; i < 8; i++, destid++){
+            if(destid == sa) continue;
+            sprintf(dest_addr, "192.168.0.%d\n", destid);
+            dest.sin_addr.s_addr = inet_addr(dest_addr);
+            sockret = sendto(client_fd, &msg, ret + HEAD_LENGTH, 0, (struct sockaddr*)&dest, len);
+        }
+#else
         sockret = sendto(client_fd, &msg, ret + HEAD_LENGTH, 0, (struct sockaddr*)&dest, len);
+#endif
         //EPT("sendto here!\n");
+#else
+
+#if UNICAST
+        for(i = 0; i < 8; i++, destid++){
+            if(destid == sa) continue;
+            sprintf(dest_addr, "192.168.0.%d\n", destid);
+            dest.sin_addr.s_addr = inet_addr(dest_addr);
+            sockret = sendto(client_fd, &msg, (ret * 2 * CHANNEL_NUM) + HEAD_LENGTH, 0, (struct sockaddr*)&dest, len);
+        }
 #else
         sockret = sendto(client_fd, &msg, (ret * 2 * CHANNEL_NUM) + HEAD_LENGTH, 0, (struct sockaddr*)&dest, len);
 #endif
 
+#endif
+
 #if FILE_TEST
-        sprintf(ftest_buf, "000\0");
+        sprintf(ftest_buf, "000");
         write(file_fd, ftest_buf, strlen(ftest_buf));
         write(file_fd, msg.data, ret * 2 * CHANNEL_NUM);
 #endif
@@ -408,7 +430,7 @@ int socket_create_ser(int *fd, struct sockaddr_in *src)
 {
     int rval = 0;
     int optval = 1;
-#if !BROADCAST
+#if MULTICAST
     struct in_addr ia;
     struct ip_mreq mreq;
     struct hostent *group;
@@ -437,7 +459,7 @@ int socket_create_ser(int *fd, struct sockaddr_in *src)
 #if BROADCAST
     //broadcast
     setsockopt(*fd, SOL_SOCKET, SO_BROADCAST | SO_REUSEADDR, &optval, sizeof(int));
-#else
+#elif MULTICAST
     if(setsockopt(*fd, IPPROTO_IP, IP_ADD_MEMBERSHIP, &mreq, sizeof(struct ip_mreq)) == -1){
         perror("setsockopt");
         exit(-1);
@@ -446,9 +468,9 @@ int socket_create_ser(int *fd, struct sockaddr_in *src)
 
     memset(src, 0, sizeof(struct sockaddr_in));
     src->sin_family = AF_INET;
-#if BROADCAST
+#if BROADCAST || UNICAST
     src->sin_addr.s_addr = htonl(INADDR_ANY);
-#else
+#elif MULTICAST
     if(inet_pton(AF_INET, GROUP_IP, &src->sin_addr) <= 0) {
         printf("Wrong dest IP address!\n");
         rval = 2;
@@ -504,6 +526,8 @@ int udp_recv(int client_fd)
 
     while(!recv_enable);
 
+    pmsg = (trans_data*)buf;
+
     while(1){
 #if TIME_TEST_RECV
         gettimeofday(&start, NULL);
@@ -516,8 +540,6 @@ int udp_recv(int client_fd)
 #endif
         //EPT("receive msg, ret = %d\n", ret);
         if(ret == 0) continue;
-
-        pmsg = (trans_data*)buf;
 
 #if !LOCAL_TEST
         if(sa == pmsg->node){
@@ -545,13 +567,14 @@ int udp_recv(int client_fd)
 
         index = pmsg->node - 1;
 
-        if((MYMAX(node_pbuf[index].seq, pmsg->seq) - MYMIN(node_pbuf[index].seq, pmsg->seq)) > 100){
+        if((MYMAX(node_pbuf[index].seq, pmsg->seq) - MYMIN(node_pbuf[index].seq, pmsg->seq)) > 50){
             node_pbuf[index].seq = pmsg->seq;
-        }
-        else if(node_pbuf[index].seq > pmsg->seq){
-            EPT("drop unsequence packet!\n");
+        }else if(node_pbuf[index].seq > pmsg->seq){
+            EPT("drop unsequence packet!,node[%d]:seq=%d local_seq=%d, ret=%d\n", pmsg->node, pmsg->seq, node_pbuf[index].seq, ret);
             pthread_mutex_unlock(&recv_mutex);
             continue;
+        }else{
+            node_pbuf[index].seq = pmsg->seq;
         }
 
         //drop the first 50 packets
