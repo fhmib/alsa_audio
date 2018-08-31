@@ -37,18 +37,17 @@
 #define BUFFER_SIZE         32           //size of cyclic buffer
 //#define SAMPLE_RATE         44100
 #define SAMPLE_RATE         8000
-#define PERIOD_FRAMES       400          //number of frames with a period
+#define PERIOD_FRAMES       1000         //number of frames with a period
 #define CHANNEL_NUM         1
 #define PERIOD_BYTES        (2*PERIOD_FRAMES*CHANNEL_NUM)
 #define TRANS_DATA_SIZE     (PERIOD_BYTES * 1)
 #define AUDIO_DATA_SIZE     TRANS_DATA_SIZE
 
-#define MIX_CHANNEL_COUNT   3
 #define SIZE_AUDIO_FRAME    2
 
 #define NOISE_CNT           50
 #define CAL_TIME_CNT        5
-#define MIX_CHANNEL_COUNT   3
+#define MIX_CHANNEL_COUNT   2
 
 #define ENCODE              1
 /***********************************

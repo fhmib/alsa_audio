@@ -336,6 +336,12 @@ int udp_send(int client_fd, struct sockaddr_in dest, snd_pcm_t *handle)
 
         noise_flag = 0;
 
+        //do not sendto if playing over MIX_CHANNEL_COUNT sounds now
+        //the function can not use with LOCAL_TEST function at the same time
+#if !LOCAL_TEST
+        if(mix_count >= MIX_CHANNEL_COUNT) continue;
+#endif
+
         //noise filter
         if((((short*)msg.data)[0] == 0) && (((short*)(msg.data+((ret-1)*2*CHANNEL_NUM)))[0] == 0)){
             continue;
@@ -737,7 +743,7 @@ void *play_thread(void *arg)
                 }
                 memcpy(mix_buf[j].buf, pdata->buf[pdata->head], pdata->size[pdata->head]);
                 mix_buf[j].size = pdata->size[pdata->head];
-                j++;
+                node_list[j++] = i+1;
 
                 //without mixer code
                 /*ret = snd_pcm_writei(handle, pdata->buf[pdata->head], pdata->size[pdata->head]/(2*CHANNEL_NUM));
