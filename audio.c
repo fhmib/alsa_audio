@@ -336,6 +336,12 @@ int udp_send(int client_fd, struct sockaddr_in dest, snd_pcm_t *handle)
 
         noise_flag = 0;
 
+        //do not sendto if playing over MIX_CHANNEL_COUNT sounds now
+        //the function can not use with LOCAL_TEST function at the same time
+#if !LOCAL_TEST
+        if(mix_count >= MIX_CHANNEL_COUNT) continue;
+#endif
+
         //noise filter
         if((((short*)msg.data)[0] == 0) && (((short*)(msg.data+((ret-1)*2*CHANNEL_NUM)))[0] == 0)){
             continue;
@@ -379,7 +385,7 @@ int udp_send(int client_fd, struct sockaddr_in dest, snd_pcm_t *handle)
 #endif
 
 #if FILE_TEST
-        sprintf(ftest_buf, "000\0");
+        sprintf(ftest_buf, "000");
         write(file_fd, ftest_buf, strlen(ftest_buf));
         write(file_fd, msg.data, ret * 2 * CHANNEL_NUM);
 #endif
@@ -526,6 +532,8 @@ int udp_recv(int client_fd)
 
     while(!recv_enable);
 
+    pmsg = (trans_data*)buf;
+
     while(1){
 #if TIME_TEST_RECV
         gettimeofday(&start, NULL);
@@ -538,8 +546,6 @@ int udp_recv(int client_fd)
 #endif
         //EPT("receive msg, ret = %d\n", ret);
         if(ret == 0) continue;
-
-        pmsg = (trans_data*)buf;
 
 #if !LOCAL_TEST
         if(sa == pmsg->node){
@@ -567,13 +573,14 @@ int udp_recv(int client_fd)
 
         index = pmsg->node - 1;
 
-        if((MYMAX(node_pbuf[index].seq, pmsg->seq) - MYMIN(node_pbuf[index].seq, pmsg->seq)) > 100){
+        if((MYMAX(node_pbuf[index].seq, pmsg->seq) - MYMIN(node_pbuf[index].seq, pmsg->seq)) > 50){
             node_pbuf[index].seq = pmsg->seq;
-        }
-        else if(node_pbuf[index].seq > pmsg->seq){
-            EPT("drop unsequence packet!\n");
+        }else if(node_pbuf[index].seq > pmsg->seq){
+            EPT("drop unsequence packet!,node[%d]:seq=%d local_seq=%d, ret=%d\n", pmsg->node, pmsg->seq, node_pbuf[index].seq, ret);
             pthread_mutex_unlock(&recv_mutex);
             continue;
+        }else{
+            node_pbuf[index].seq = pmsg->seq;
         }
 
         //drop the first 50 packets
@@ -736,7 +743,7 @@ void *play_thread(void *arg)
                 }
                 memcpy(mix_buf[j].buf, pdata->buf[pdata->head], pdata->size[pdata->head]);
                 mix_buf[j].size = pdata->size[pdata->head];
-                j++;
+                node_list[j++] = i+1;
 
                 //without mixer code
                 /*ret = snd_pcm_writei(handle, pdata->buf[pdata->head], pdata->size[pdata->head]/(2*CHANNEL_NUM));
