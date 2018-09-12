@@ -21,50 +21,50 @@
 
 #include "g726codec.h"
 
+//socket property
 #define BROADCAST           0
 #define UNICAST             0
 #define MULTICAST           1
-#define SERVER_PORT         8888
+
+#define SERVER_PORT         7455
 #if BROADCAST
 #define SERVER_IP           "192.168.0.255"
-#else
+#elif MULTICAST
 #define GROUP_IP            "224.0.1.129"
 #endif
 //#define SERVER_IP           "192.168.0.66"
 
 #define NETDEV_NAME         "tap0"
 
-#define BUFFER_SIZE         32           //size of cyclic buffer
+#define BUFFER_SIZE         32          //size of cyclic buffer
 //#define SAMPLE_RATE         44100
-#define SAMPLE_RATE         8000
-#define PERIOD_FRAMES       1000         //number of frames with a period
+#define SAMPLE_RATE         8000        //sample rate
+#define PERIOD_FRAMES       1000        //number of frames with a period
 #define CHANNEL_NUM         1
 #define PERIOD_BYTES        (2*PERIOD_FRAMES*CHANNEL_NUM)
 #define TRANS_DATA_SIZE     (PERIOD_BYTES * 1)
 #define AUDIO_DATA_SIZE     TRANS_DATA_SIZE
 
-#define SIZE_AUDIO_FRAME    2
+#define SIZE_AUDIO_FRAME    2           //Bytes of a frame
 
-#define NOISE_CNT           50
+#define NOISE_CNT           50          //first number of frames is noise,so it should filter it
 #define CAL_TIME_CNT        5
-#define MIX_CHANNEL_COUNT   2
+#define MIX_CHANNEL_COUNT   5
 
-#define ENCODE              1
+#define ENCODE              1           //if 0, switch off encoding function
 /***********************************
-
  RATE:
  2: 1/8 encode, 16kbps(normal use)
  3: 3/16 encode, 24kbps
  4: 1/4 encode,  32kbps(normal use)
  5: 5/16 encode, 40kbps
-
 **********************************/
 #define RATE                4
 
 #define RECORD_MODE         0           //if open, only record and sending
 #define PLAYBACK_MODE       0           //if open, only receiving and playback
 #define FILE_TEST           0           //capture data to file
-#define LOCAL_TEST          0           //1 is local test, 0 is not.
+#define LOCAL_TEST          0           //1 is local test and switch off mute self funcion, 0 is not.
 #define CAPDATA_TEST        0           //capture data to file through signal action
 #define TIME_TEST_RECV      0           //calculate time of receiving
 #define TIME_TEST_PLAY      0           //calculate time of playback
@@ -81,6 +81,7 @@ typedef unsigned char   U8;
 typedef unsigned short  U16;
 typedef unsigned int    U32;
 
+//sturct store audio data for a node 
 typedef struct _cyc_data_t{
     char buf[BUFFER_SIZE][AUDIO_DATA_SIZE];
     U32 size[BUFFER_SIZE];
@@ -89,6 +90,7 @@ typedef struct _cyc_data_t{
 }cyc_data_t;
 #define CYC_DATA_SIZE       sizeof(cyc_data_t)
 
+//struct for indicating status of a node
 typedef struct _node_pbuf_t{
     U8 valid;
     U32 seq;

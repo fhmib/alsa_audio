@@ -12,13 +12,13 @@ tshare_t tshare = {
 
 node_pbuf_t node_pbuf[32];              //buffer which stores each node's info
 mix_buf_t mix_buf[MIX_CHANNEL_COUNT];   //for mixer
-pthread_mutex_t recv_mutex;
+pthread_mutex_t recv_mutex;             //mutex for node_pbuf[]
 
-U32 rec_period;
-U8 recv_enable;
+U32 rec_period;             //recording period
+U8 recv_enable;             //for sync between playback thread and recv thread
 
-U8 node_list[32];
-U8 mix_count;
+U8 node_list[32];           //for limit max count of mixer
+U8 mix_count;               //indicate how many nodes' audio data are playing
 
 #if FILE_TEST
 int file_fd;
@@ -28,7 +28,7 @@ char ftest_buf[64];
 //g726
 #if ENCODE
 g726_state_t *REC_G726Handle;
-char *EncBuf;
+char *EncBuf;                           //a pointer to encoding buffer
 #endif
 
 #if CAPDATA_TEST
@@ -329,6 +329,7 @@ int udp_send(int client_fd, struct sockaddr_in dest, snd_pcm_t *handle)
         */
 
 
+        //drop noise data
         if(noise_flag && (msg.seq < NOISE_CNT)){
             msg.seq++;
             continue;
@@ -336,7 +337,7 @@ int udp_send(int client_fd, struct sockaddr_in dest, snd_pcm_t *handle)
 
         noise_flag = 0;
 
-        //do not sendto if playing over MIX_CHANNEL_COUNT sounds now
+        //mute func:do not sendto if playing over MIX_CHANNEL_COUNT sounds now
         //the function can not use with LOCAL_TEST function at the same time
 #if !LOCAL_TEST
         if(mix_count >= MIX_CHANNEL_COUNT) continue;
@@ -505,7 +506,7 @@ int udp_recv(int client_fd)
     struct sockaddr_in dest;
     int rval = 0, ret;
     char buf[MSG_LENGTH];
-    U8 m_flag = 0;
+    U8 m_flag = 0;                      //indicate whether node is in node_list
     int i;
 
 #if CAPDATA_TEST
@@ -530,7 +531,7 @@ int udp_recv(int client_fd)
 
     len = sizeof(dest);
 
-    while(!recv_enable);
+    while(!recv_enable) usleep(50000);
 
     pmsg = (trans_data*)buf;
 
@@ -582,12 +583,6 @@ int udp_recv(int client_fd)
         }else{
             node_pbuf[index].seq = pmsg->seq;
         }
-
-        //drop the first 50 packets
-        /*
-        if(node_pbuf[index].seq < 50){
-            continue;
-        }*/
 
         if(!node_pbuf[index].valid){
             //create buffer
@@ -663,8 +658,8 @@ void *play_thread(void *arg)
     int i, j;
     cyc_data_t *pdata;
     char play_buf[PERIOD_BYTES];            //for blayback
-    char temp_buf[PERIOD_BYTES];            //for blayback
-    U32 play_len = 0;                           //length of play_buf[]
+    char temp_buf[PERIOD_BYTES];            //temp for blayback
+    U32 play_len = 0;                       //length of play_buf[]
     U32 temp_len = 0;
     snd_pcm_t *handle = NULL;
 
@@ -677,8 +672,8 @@ void *play_thread(void *arg)
     int time_fd;
     char time_buf[256];
     long d_value;
-    struct timeval start;
-    struct timeval end;
+    struct timeval start_test;
+    struct timeval end_test;
 
     time_fd = open("time.log", O_RDWR | O_TRUNC | O_CREAT);
 #endif
@@ -778,12 +773,12 @@ void *play_thread(void *arg)
 
 
 #if TIME_TEST_PLAY
-        gettimeofday(&start, NULL);
+        gettimeofday(&start_test, NULL);
 #endif
         rval = Mix(j, play_buf, &play_len);
 #if TIME_TEST_PLAY
-        gettimeofday(&end, NULL);
-        d_value = (end.tv_sec*1000000+end.tv_usec) - (start.tv_sec*1000000+start.tv_usec);
+        gettimeofday(&end_test, NULL);
+        d_value = (end_test.tv_sec*1000000+end_test.tv_usec) - (start_test.tv_sec*1000000+start_test.tv_usec);
         sprintf(time_buf, "j = %d, d_value = %ld\n\0", j, d_value);
         write(time_fd, time_buf, strlen(time_buf));
 #endif
@@ -825,7 +820,7 @@ void *play_thread(void *arg)
             EPT("short write, write %d frames\n", ret);
         }
 #if TIME_TEST_PLAY
-        //gettimeofday(&start, NULL);
+        //gettimeofday(&start_test, NULL);
 #endif
         time_flag = 1;
     }
@@ -890,12 +885,19 @@ func_exit:
     return rval;
 }
 
-//mixer
+/*
+ * func:
+ *      mixer interface
+ * parameters:
+ *      number:         count of mix
+ *      play_buf:       buffer for playback
+ *      pplay_len:      length of play_buf
+ */
 int Mix(int number, char *play_buf, U32 *pplay_len)
 {
     int rval = 0;
     U32 play_len;       //length of play_buf
-    int i, j, k;
+    int i, j, k;        //i:index of mix_buf    j:mix count per frame
     char sourcefile[MIX_CHANNEL_COUNT][2];
     char *pos;
     short data_mix;     //stores 16-bits audio data which has been processed
@@ -909,19 +911,19 @@ int Mix(int number, char *play_buf, U32 *pplay_len)
     while(1){
         j = 0;
 
-        for(i = 0; i < number; i++){
+        for(i = 0; i < number; i++){        //copy a frame to sourcefile from mux_buf
             if(ret[i] < 2) continue;
             memcpy(sourcefile[j], mix_buf[i].buf+play_len, 2);
             k = j;
             j++;
         }
-        if(j > 1){
+        if(j > 1){          //if j > 1,go mix
             _Mix(sourcefile, j, (char*)&data_mix);
             if(data_mix > pow(2,16-1) || data_mix < -pow(2,16-1))
                 EPT("mix error\n");
-        }else if(j == 1){
+        }else if(j == 1){   //if j == 1, do not mix
             data_mix = *(short*)sourcefile[k];
-        }else{
+        }else{              //end
             break;
         }
 
@@ -975,6 +977,7 @@ void _Mix(char sourseFile[MIX_CHANNEL_COUNT][SIZE_AUDIO_FRAME],int number,char *
 }
 
 //dynamic memory managment
+//check memory erver 10 seconds
 void dmm(int signal){
     int i;
 
